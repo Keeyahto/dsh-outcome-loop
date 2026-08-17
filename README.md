@@ -42,6 +42,8 @@ Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
 /outcome criterion add-command "pnpm test"          # 添加命令验收（退出码 0）
 /outcome criterion add-test                          # 添加测试验收
 /outcome criterion add-file dist/bundle.js          # 添加产物文件验收
+/outcome criterion add-test --min-passed 2 --max-failed 1
+                                                     # 结构化测试计数（TAP 输出自动解析）
 /outcome verify                                     # 运行验收（被动观察，不执行新命令）
 /outcome status                                     # 查看机械验证 + 用户 disposition 双轴结果
 /outcome accept | reject | revise | abandon         # 用户对结果的态度（与机械验证独立）
@@ -49,6 +51,9 @@ Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
 /outcome export <contract> --approve <digest> --out <path> [--overwrite]
                                                      # 批准并原子写入 JSONL 文件
 /outcome exports [<contract>]                        # 列出导出 manifest
+/outcome import <path>                              # 导入结构化 Task Contract 文件（outcome-loop.contract.v1）
+/outcome export-contract <id> --out <path>          # 导出契约文件
+/outcome cost [<contract>]                          # token 用量（可选价格表 → 货币成本估计）
 /outcome delete <contract-id> --yes                 # 删除 sidecar 数据（会话日志永不触碰）
 ```
 

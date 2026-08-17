@@ -71,6 +71,8 @@ const specificationSchema: z.ZodType<CriterionSpecification> = z.discriminatedUn
     framework: z.enum(['tap', 'junit', 'any']),
     minPassed: z.number().int().nonnegative(),
     maxFailed: z.number().int().nonnegative(),
+    command: z.string().optional(),
+    reportPath: z.string().optional(),
   }),
   z.object({ kind: z.literal('file-exists'), path: z.string() }),
   z.object({ kind: z.literal('file-absent'), path: z.string() }),

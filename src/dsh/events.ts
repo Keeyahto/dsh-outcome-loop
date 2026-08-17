@@ -9,6 +9,7 @@
 
 import { contentHash } from '../domain/ids.ts'
 import type { SessionFact } from '../domain/types.ts'
+import { looksLikeTap, parseTap } from '../verification/adapters/tap.ts'
 
 /** Event types we recognize; everything else yields a tolerated `unknown` fact. */
 export const KNOWN_TYPES = new Set([
@@ -243,6 +244,23 @@ export function normalizeEvent(
       // for why arbitrary bash mutations are not tracked passively).
       if (isWriteTool(name) && !isError) {
         facts.push({ kind: 'file-change-marker', ...base, toolName: name })
+      }
+      // Structured TAP extraction for test commands: parse in memory, store
+      // only counts (hot path stays constant-size on the ledger).
+      const label = pending?.commandLabel ?? name
+      if (isTestCommand(label) && text.length > 0 && looksLikeTap(text)) {
+        const counts = parseTap(text)
+        if (counts !== undefined) {
+          facts.push({
+            kind: 'test-report',
+            ...base,
+            framework: 'tap',
+            passed: counts.passed,
+            failed: counts.failed,
+            skipped: counts.skipped,
+            sourceLabel: label,
+          })
+        }
       }
       break
     }

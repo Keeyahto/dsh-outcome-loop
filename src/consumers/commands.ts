@@ -21,6 +21,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
+import s from '@deepseek-ai/schemastery'
 
 import type { NewCriterionInput } from '../domain/aggregate.ts'
 import type { OutcomeResult } from '../domain/errors.ts'
@@ -30,6 +31,31 @@ import type { OutcomeLoopService } from '../service.ts'
 
 export const name = 'outcome-loop-commands'
 export const inject = ['commands', 'outcomeLoop']
+
+/**
+ * Consumer configuration. Tunables stay in Schemastery; the price table is
+ * user-owned and optional (monetary cost is only ever an estimate derived
+ * from it — see PRIVACY.md).
+ */
+export const Config: ReturnType<typeof s.object> = s.object({
+  cost: s
+    .object({
+      priceTable: s
+        .array(
+          s.object({
+            provider: s.string(),
+            model: s.string(),
+            currency: s.string(),
+            pricePerMillionInput: s.number(),
+            pricePerMillionOutput: s.number(),
+            effectiveFrom: s.number(),
+            source: s.string(),
+          }),
+        )
+        .default([]),
+    }),
+})
+export type CommandsConfig = Schemastery.TypeT<typeof Config>
 
 const USAGE = 'Usage: /outcome <new|criterion|list|status|verify|accept|reject|revise|abandon|export|exports|delete> …'
 
@@ -107,7 +133,7 @@ function specForCriterion(kind: string, args: ParsedArgs): { description: string
   }
 }
 
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: CommandsConfig): void {
   ctx.commands.register({
     name: 'outcome',
     description: 'task outcome ledger: create contracts, verify acceptance criteria, set disposition, export JSONL',
@@ -232,7 +258,7 @@ export function apply(ctx: Context): void {
                 }
                 const result = await service.exportJsonl({ contractId: contract.id, previewDigest: approveDigest })
                 if (!result.ok) return { kind: 'error', text: formatError(result.error) }
-                const write = await writeExportFile(invocation, outPath, result.value.content, args.options.has('overwrite'))
+                const write = await writeScopedFile(invocation, outPath, result.value.content, args.options.has('overwrite'))
                 if (!write.ok) return { kind: 'error', text: formatError(write.error) }
                 out.push(
                   `Export approved: ${result.value.manifest.id}`,
@@ -269,6 +295,55 @@ export function apply(ctx: Context): void {
             }
             return { kind: 'success', text: out.join('\n') }
           }
+          case 'import': {
+            const path = args.positionals[1]
+            if (path === undefined) {
+              return { kind: 'error', text: 'import requires a workspace-relative contract file path' }
+            }
+            const read = await readScopedFile(invocation, path)
+            if (!read.ok) return { kind: 'error', text: formatError(read.error) }
+            const { parseContractFile } = await import('../export/contract.ts')
+            const parsed = parseContractFile(read.value, sessionId)
+            if (!parsed.ok) return { kind: 'error', text: formatError(parsed.error) }
+            const result = await service.createContract({
+              sessionId,
+              ...(parsed.value.goalText === undefined ? {} : { goalText: parsed.value.goalText }),
+              ...(parsed.value.goalSeq === undefined ? {} : { goalSeq: parsed.value.goalSeq }),
+              ...(parsed.value.workspaceRoot === undefined ? {} : { workspaceRoot: parsed.value.workspaceRoot }),
+              ...(parsed.value.constraints === undefined ? {} : { constraints: parsed.value.constraints }),
+              criteria: parsed.value.criteria,
+            })
+            if (!result.ok) return { kind: 'error', text: formatError(result.error) }
+            return { kind: 'success', text: `Contract imported: ${result.value.id} (${result.value.criteria.length} criteria)` }
+          }
+          case 'export-contract': {
+            const id = contractId(args.positionals[1] ?? '')
+            const outPath = args.options.get('out')
+            if (outPath === undefined) {
+              return { kind: 'error', text: 'export-contract requires --out <path>' }
+            }
+            const contract = await service.getContract(id)
+            if (!contract.ok) return { kind: 'error', text: formatError(contract.error) }
+            const { serializeContract } = await import('../export/contract.ts')
+            const write = await writeScopedFile(invocation, outPath, serializeContract(contract.value), args.options.has('overwrite'))
+            if (!write.ok) return { kind: 'error', text: formatError(write.error) }
+            return { kind: 'success', text: `Contract exported to ${write.value}` }
+          }
+          case 'cost': {
+            const contracts = await resolveContracts(service, sessionId, args.positionals[1])
+            if (!contracts.ok) return { kind: 'error', text: formatError(contracts.error) }
+            const out: string[] = []
+            for (const contract of contracts.value) {
+              const { usageFromFacts, costOf } = await import('../dsh/token-bridge.ts')
+              const usage = usageFromFacts(service.registry.getLog(contract.sessionId))
+              const line = `${contract.id}: ${usage.calls} call(s), ${usage.inputTokens ?? 0} in / ${usage.outputTokens ?? 0} out tokens (${usage.usageKind})`
+              const cost = costOf(usage, config.cost.priceTable, Date.now())
+              out.push(cost === undefined
+                ? `${line} — no configured price table entry (tokens only, see PRIVACY.md)`
+                : `${line} — ~${formatMoney(cost.totalCost, cost.currency)} (${cost.entry.source}, effective ${new Date(cost.entry.effectiveFrom).toISOString()})`)
+            }
+            return { kind: 'success', text: out.join('\n') }
+          }
           case 'delete': {
             const id = contractId(args.positionals[1] ?? '')
             if (!args.options.has('yes')) {
@@ -290,31 +365,44 @@ export function apply(ctx: Context): void {
 }
 
 /**
- * Write the approved export content to a user-chosen path (spec §14.3, §14.5):
- * - path must be workspace-relative and must not escape the workspace;
- * - write is atomic (temp file + rename);
- * - an existing target requires an explicit --overwrite flag.
+ * Resolve a user-supplied path against the session workspace (spec §14.3):
+ * workspace-relative only, no `..`/absolute escapes.
  */
-async function writeExportFile(
+async function resolveScopedTarget(
+  invocation: { agent: { session: { header: { cwd?: string } } } },
+  path: string,
+): Promise<OutcomeResult<string>> {
+  const cwd = invocation.agent.session.header.cwd
+  if (cwd === undefined) {
+    return { ok: false, error: { code: 'invalid-input', message: 'this session has no workspace root (cwd)' } }
+  }
+  const { isAbsolute, resolve, relative } = await import('node:path')
+  if (isAbsolute(path)) {
+    return { ok: false, error: { code: 'invalid-input', message: 'path must be workspace-relative' } }
+  }
+  const target = resolve(cwd, path)
+  const rel = relative(cwd, target)
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    return { ok: false, error: { code: 'invalid-input', message: `path '${path}' escapes the workspace` } }
+  }
+  return { ok: true, value: target }
+}
+
+/**
+ * Write content to a user-chosen path atomically (temp file + rename);
+ * an existing target requires an explicit --overwrite flag.
+ */
+async function writeScopedFile(
   invocation: { agent: { session: { header: { cwd?: string } } } },
   outPath: string,
   content: string,
   overwrite: boolean,
 ): Promise<OutcomeResult<string>> {
-  const cwd = invocation.agent.session.header.cwd
-  if (cwd === undefined) {
-    return { ok: false, error: { code: 'invalid-input', message: 'this session has no workspace root (cwd) to write into' } }
-  }
-  const { isAbsolute, resolve, relative, dirname } = await import('node:path')
-  if (isAbsolute(outPath)) {
-    return { ok: false, error: { code: 'invalid-input', message: 'export path must be workspace-relative' } }
-  }
-  const target = resolve(cwd, outPath)
-  const rel = relative(cwd, target)
-  if (rel.startsWith('..') || isAbsolute(rel)) {
-    return { ok: false, error: { code: 'invalid-input', message: `export path '${outPath}' escapes the workspace` } }
-  }
-  const { access, rename, writeFile, mkdir } = await import('node:fs/promises')
+  const targetResult = await resolveScopedTarget(invocation, outPath)
+  if (!targetResult.ok) return targetResult
+  const target = targetResult.value
+  const { access, rename, writeFile, mkdir, rm } = await import('node:fs/promises')
+  const { dirname } = await import('node:path')
   if (!overwrite) {
     try {
       await access(target)
@@ -329,11 +417,25 @@ async function writeExportFile(
     await writeFile(tmp, content, 'utf8')
     await rename(tmp, target)
   } catch (error) {
-    const { rm } = await import('node:fs/promises')
     await rm(tmp, { force: true })
-    return { ok: false, error: { code: 'storage-error', message: `failed to write export: ${error instanceof Error ? error.message : String(error)}` } }
+    return { ok: false, error: { code: 'storage-error', message: `failed to write file: ${error instanceof Error ? error.message : String(error)}` } }
   }
   return { ok: true, value: target }
+}
+
+/** Read a user-pointed-at workspace file (explicit user authorization). */
+async function readScopedFile(
+  invocation: { agent: { session: { header: { cwd?: string } } } },
+  path: string,
+): Promise<OutcomeResult<string>> {
+  const targetResult = await resolveScopedTarget(invocation, path)
+  if (!targetResult.ok) return targetResult
+  const { readFile } = await import('node:fs/promises')
+  try {
+    return { ok: true, value: await readFile(targetResult.value, 'utf8') }
+  } catch (error) {
+    return { ok: false, error: { code: 'storage-error', message: `failed to read '${path}': ${error instanceof Error ? error.message : String(error)}` } }
+  }
 }
 
 async function resolveContracts(
@@ -360,6 +462,10 @@ function goalDigest(contract: { goal: { kind: string; ref?: { sessionId: string;
 function criterionLabel(contract: { criteria: readonly { id: string; description: string }[] }, id: string): string {
   const criterion = contract.criteria.find((c) => c.id === id)
   return criterion?.description ?? id
+}
+
+function formatMoney(value: number, currency: string): string {
+  return `${currency} ${value.toFixed(6)}`
 }
 
 function formatError(error: { code: string; message: string }): string {

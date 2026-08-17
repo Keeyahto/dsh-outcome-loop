@@ -357,13 +357,93 @@ export async function verifyActive(
       }
     }
     case 'test-report': {
-      // Framework-specific report parsing is a future verifier provider;
-      // active verification never fabricates a test run.
+      // TAP from a command's output (framework 'tap' + command), or a report
+      // file (TAP text or JUnit XML via reportPath). Never fabricates a run.
+      if (specification.framework === 'junit') {
+        if (specification.reportPath === undefined) {
+          return {
+            status: 'unknown',
+            fact: { kind: 'verifier', providerId: 'junit-report', verdict: 'unknown', detail: 'junit requires reportPath' },
+            sensitivity: 'internal',
+            note: 'junit test-report criteria need a reportPath (workspace-relative)',
+          }
+        }
+        const target = resolveScopedPath(options.scopeRoot, specification.reportPath)
+        if (target === undefined) {
+          return {
+            status: 'unknown',
+            fact: { kind: 'verifier', providerId: 'junit-report', verdict: 'unknown', detail: 'reportPath escapes scope' },
+            sensitivity: 'internal',
+            note: `reportPath '${specification.reportPath}' escapes the workspace scope`,
+          }
+        }
+        try {
+          const xml = await readFile(target, 'utf8')
+          const { parseJunit, junitSatisfies } = await import('./junit.ts')
+          const counts = parseJunit(xml)
+          if (counts === undefined) {
+            return {
+              status: 'unknown',
+              fact: { kind: 'verifier', providerId: 'junit-report', verdict: 'unknown', detail: 'not a JUnit XML report' },
+              sensitivity: 'internal',
+              note: `'${specification.reportPath}' does not look like a JUnit report`,
+            }
+          }
+          const ok = junitSatisfies(counts, specification.minPassed, specification.maxFailed)
+          return {
+            status: ok ? 'pass' : 'fail',
+            fact: {
+              kind: 'test-report',
+              framework: 'junit',
+              passed: counts.passed,
+              failed: counts.failed,
+              skipped: counts.skipped,
+              sourceLabel: specification.reportPath,
+            },
+            sensitivity: 'internal',
+            note: ok ? undefined : `${counts.failed} failed / ${counts.passed} passed does not satisfy ${specification.maxFailed}/${specification.minPassed}`,
+          }
+        } catch (error) {
+          return {
+            status: 'unknown',
+            fact: { kind: 'verifier', providerId: 'junit-report', verdict: 'unknown', detail: 'report read failed' },
+            sensitivity: 'internal',
+            note: error instanceof Error ? error.message : String(error),
+          }
+        }
+      }
+      if (specification.framework === 'tap' && specification.command !== undefined) {
+        const outcome = await run(specification.command)
+        const { looksLikeTap, parseTap, tapSatisfies } = await import('./tap.ts')
+        const counts = outcome.exitCode !== null && looksLikeTap(outcome.output) ? parseTap(outcome.output) : undefined
+        if (counts === undefined) {
+          return {
+            status: 'unknown',
+            fact: { kind: 'verifier', providerId: 'tap-report', verdict: 'unknown', detail: 'no TAP output' },
+            sensitivity: 'internal',
+            note: `'${specification.command}' produced no parseable TAP output`,
+          }
+        }
+        const ok = tapSatisfies(counts, specification.minPassed, specification.maxFailed)
+        return {
+          status: ok ? 'pass' : 'fail',
+          fact: {
+            kind: 'test-report',
+            framework: 'tap',
+            passed: counts.passed,
+            failed: counts.failed,
+            skipped: counts.skipped,
+            sourceLabel: specification.command,
+          },
+          sensitivity: 'internal',
+          note: ok ? undefined : `${counts.failed} failed / ${counts.passed} passed does not satisfy ${specification.maxFailed}/${specification.minPassed}`,
+        }
+      }
       return {
         status: 'unknown',
-        fact: { kind: 'verifier', providerId: 'test-report', verdict: 'unknown', detail: 'no active runner for this framework' },
+        fact: { kind: 'verifier', providerId: 'test-report', verdict: 'unknown', detail: 'no active runner for this configuration' },
         sensitivity: 'internal',
-        note: 'use a command-exit criterion with your concrete test command',
+        note: 'tap framework needs a command; junit needs a reportPath',
       }
     }
     case 'manual':

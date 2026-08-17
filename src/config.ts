@@ -9,7 +9,7 @@
 
 import s from '@deepseek-ai/schemastery'
 
-export const Config = s.object({
+export const Config: ReturnType<typeof s.object> = s.object({
   mode: s.string().default('personal'),
   capture: s
     .object({
@@ -39,6 +39,28 @@ export const Config = s.object({
     .object({
       /** 0 (default) = keep evidence forever; otherwise prune older rows at startup. */
       evidenceMaxAgeMs: s.number().default(0),
+    }),
+  cost: s
+    .object({
+      /**
+       * Optional user-owned price table (spec §8.6): monetary cost is ONLY
+       * computed when a matching entry exists; otherwise tokens only.
+       * Every entry must record provider, model, currency, effective period
+       * and source. Prices are never hardcoded by the plugin.
+       */
+      priceTable: s
+        .array(
+          s.object({
+            provider: s.string(),
+            model: s.string(),
+            currency: s.string(),
+            pricePerMillionInput: s.number(),
+            pricePerMillionOutput: s.number(),
+            effectiveFrom: s.number(),
+            source: s.string(),
+          }),
+        )
+        .default([]),
     }),
   feedback: s
     .object({

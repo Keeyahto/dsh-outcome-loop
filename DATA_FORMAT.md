@@ -40,6 +40,7 @@ interface AcceptanceCriterion {
   kind: 'command-exit' | 'test-report' | 'file-exists' | 'file-absent'
       | 'file-digest' | 'json-schema' | 'git-scope' | 'diagnostic-count'
       | 'manual' | 'custom'
+      （test-report 支持可选 command / reportPath，见 domain/types.ts）
   required: boolean
   severity: 'blocking' | 'warning'
   specification: <判别联合，见 domain/types.ts>

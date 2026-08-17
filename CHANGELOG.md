@@ -2,6 +2,23 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.3] - 2026-08-18
+
+### Added
+
+- **结构化测试报告解析**（阶段 7 第 1 项）：
+  - TAP 解析器（`tap.ts`）在事件归一化时从测试命令输出中提取真实计数（passed/failed/skipped/planned），只存计数、不存正文；`test-report` 验收从"退出码代理"升级为结构化计数，`--min-passed/--max-failed` 生效；
+  - JUnit XML 解析器（`junit.ts`）；active 验证可读取 workspace 内 `reportPath` 的 JUnit 报告，或运行 `command` 解析其 TAP 输出（四重策略门不变）；
+  - `test-report` specification 新增可选 `command` / `reportPath`（向后兼容）。
+- **Task Contract 导入/导出**（spec §6 必须项 #2）：版本化文件格式 `outcome-loop.contract.v1`；`/outcome import <path>`（用户显式指向、全字段校验、session 匹配检查、路径防逃逸）、`/outcome export-contract <id> --out <path>`。
+- **本地成本报告**（spec §8.6）：默认只报 token 数（exact usage 优先）；`cost.priceTable` 可选配置（每条含 provider/model/currency/单价/effectiveFrom/source，加载时校验）；`/outcome cost` 仅在存在匹配条目时计算货币成本，其余情况明确标注 tokens-only。价格永不硬编码。
+- **热路径性能护栏**（spec §13）：5000 事件归一化耗时上限 + per-kind 事实保留上限 + 每事件事实数 ≤ 2 的断言。
+- `parseArgs` 支持 `--key value` 消费（beta.2 修复的回归测试补全）。
+
+### Security
+
+- 导入契约文件不自动发现、不隐式信任：必须用户显式 `/outcome import <path>`，路径 workspace 内，逐字段 zod 校验，导入后仍套用保守策略默认值。
+
 ## [0.1.0-beta.2] - 2026-08-18
 
 ### Added

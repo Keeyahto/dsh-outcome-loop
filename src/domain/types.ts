@@ -90,7 +90,16 @@ export type CriterionKind =
  */
 export type CriterionSpecification =
   | { kind: 'command-exit'; command: string; expectExitCode: number }
-  | { kind: 'test-report'; framework: 'tap' | 'junit' | 'any'; minPassed: number; maxFailed: number }
+  | {
+      kind: 'test-report'
+      framework: 'tap' | 'junit' | 'any'
+      minPassed: number
+      maxFailed: number
+      /** Active verification: the command whose output carries a TAP report. */
+      command?: string
+      /** Active verification: workspace-relative file to parse (TAP text or JUnit XML). */
+      reportPath?: string
+    }
   | { kind: 'file-exists'; path: string }
   | { kind: 'file-absent'; path: string }
   | { kind: 'file-digest'; path: string; algorithm: 'sha256'; digest: string }
@@ -374,6 +383,17 @@ export type SessionFact =
   | { kind: 'usage'; seq: number; time: number; inputTokens?: number; outputTokens?: number; totalTokens?: number; usageKind: 'exact' | 'estimate' | 'unknown' }
   | { kind: 'tool-call'; seq: number; time: number; callId: string; name: string; argumentsDigest: string }
   | { kind: 'tool-result'; seq: number; time: number; callId: string; name: string; isError: boolean; errorCode?: string; durationMs?: number; outputBytes?: number; exitCode?: number; commandLabel?: string }
+  | {
+      /** Structured test counts extracted from a test command's TAP output. */
+      kind: 'test-report'
+      seq: number
+      time: number
+      framework: 'tap' | 'junit'
+      passed: number
+      failed: number
+      skipped?: number
+      sourceLabel: string
+    }
   | { kind: 'file-change-marker'; seq: number; time: number; toolName: string }
   | { kind: 'feedback'; seq: number; time: number; textDigest: string }
   | { kind: 'route'; seq: number; time: number; provider: string; model: string }

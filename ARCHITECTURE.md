@@ -46,7 +46,13 @@ consumers (命令/投影)  ──只调用──▶  service (ctx.outcomeLoop)
 
 验证时若契约 session 尚无事实日志且挂载了可选 `sessionPersistence`，`service.verify` 先 best-effort 回放权威日志（`inspect()`）再验证；无该服务时该 session 不产生事实，criterion 保守 `unknown`。
 
-### 2.4 验证（`verification/engine.ts`）
+### 2.4 结构化测试报告（beta.3）
+
+- 事件归一化对测试命令输出做 TAP 解析（内存中完成，只存计数）——`test-report` 验收使用真实 passed/failed/skipped 计数而非退出码代理；
+- active 路径：`junit` 框架读取 workspace 内 `reportPath` 的 JUnit XML；`tap` 框架运行 `command` 并解析其 TAP 输出（仍受四重策略门约束）；
+- 解析器纯函数、无依赖（`verification/adapters/tap.ts`、`junit.ts`）。
+
+### 2.5 验证（`verification/engine.ts`）
 
 1. 被动适配器从事实日志 + 先前证据行计算每个 criterion 的初步判定（spec §12.2：观察不到足够事实 → `unknown`，**绝不**为拿标签自动重跑命令）；
 2. 仅当所有策略门（部署 `autoRun` + 契约 `verificationPolicy.autoRun` + scope `allowActiveVerification` + verifier 白名单 + 绝对 workspaceRoot）都打开时，才运行 active verifier（spec §12.3：argv+cwd、无 shell 拼接、env allowlist、timeout、output cap、AbortSignal、默认只读、默认无网络）；
@@ -56,7 +62,7 @@ consumers (命令/投影)  ──只调用──▶  service (ctx.outcomeLoop)
 
 标签强度由 `evidenceLabelStrength()` 从实际证据行的 strength 计算：strong（机械确定性）/ medium（用户确认）/ weak（仅 judge，本版本无 judge）/ unknown。
 
-### 2.5 导出（`export/`）
+### 2.6 导出（`export/`）
 
 preview（`previewExport`）→ 用户批准 digest（`exportJsonl` 重算并比对，内容变化即 `export-approval-invalid`）→ 写入。导出记录由权威 records 派生，永不反向修改账本。
 
@@ -97,6 +103,10 @@ preview（`previewExport`）→ 用户批准 digest（`exportJsonl` 重算并比
 - 冷 session 且无 `sessionPersistence` 时，历史事实不可重建 → 证据缺失 → `unknown`；
 - `session/event` 热路径不做磁盘 IO；写入经 per-session 队列异步完成。
 
-## 7. 与 dsh-code-reference 的可选集成
+## 7. 契约文件（`outcome-loop.contract.v1`）
+
+`/outcome import` / `export-contract` 使用版本化 JSON 文件（`src/export/contract.ts`）。文件是用户显式指向的输入：不自动发现、不隐式信任，逐字段 zod 校验；导入契约沿用保守策略默认（`autoRun: false`、`private-only`）。注意：契约文件包含 explicit goal 文本（用户自有数据），与**导出记录**（默认最小化、只含 digest）是两回事。
+
+## 8. 与 dsh-code-reference 的可选集成
 
 outcome-loop 暴露 `recordDecisionEvidence()`（source: `'dsh-code-reference'` 等，`decision` 证据类型）作为通用 decision-evidence 入口；code-reference 或桥接插件可主动提交 PriorDecisionEvidence（决策 id、strategy、predictedMatch/effort、policyDigest）。`decision` 证据分类 internal、永不参与验证判定（`impliesVerdict` 返回 unknown）——它是用户的校准数据，不是成功因果。集成方不得 import 本包内部文件；启发式相似度**不**等于真实复用收益；候选仓库完整代码/README 永不保存。

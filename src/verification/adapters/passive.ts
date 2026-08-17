@@ -100,6 +100,25 @@ export function verifyPassive(
     }
     case 'test-report': {
       const spec = criterion.specification
+      // 1) Structured counts win: TAP facts extracted at normalization time.
+      const structured = log.facts.filter((f): f is SessionFact & { kind: 'test-report' } => f.kind === 'test-report')
+        .filter((f) => spec.framework === 'any' || f.framework === spec.framework)
+      const structuredLatest = latestOf(structured, (f) => f.seq)
+      if (structuredLatest !== undefined) {
+        const fact: EvidenceFact = {
+          kind: 'test-report',
+          framework: structuredLatest.framework,
+          passed: structuredLatest.passed,
+          failed: structuredLatest.failed,
+          skipped: structuredLatest.skipped,
+          sourceLabel: structuredLatest.sourceLabel,
+        }
+        const ok = structuredLatest.failed <= spec.maxFailed && structuredLatest.passed >= spec.minPassed
+        return ok
+          ? { status: 'pass', facts: [fact], conflict: false }
+          : { status: 'fail', facts: [fact], conflict: false, note: `${structuredLatest.failed} failed / ${structuredLatest.passed} passed does not satisfy ${spec.maxFailed}/${spec.minPassed}` }
+      }
+      // 2) Fallback: a test command that exited 0/1 (exit-code proxy).
       const testRuns = commandFacts(log).filter((f) => isTestCommand(f.commandLabel ?? f.name))
       const latest = latestOf(testRuns, (f) => f.seq)
       if (latest === undefined) {

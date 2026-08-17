@@ -28,7 +28,7 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export const VERSION = '0.1.0-beta.2'
+export const VERSION = '0.1.0-beta.3'
 
 /** Validate config at load time; fail loud on impossible values. */
 export function validateConfig(config: ConfigType): void {
@@ -46,6 +46,21 @@ export function validateConfig(config: ConfigType): void {
   }
   if (config.capture.rawMessages || config.capture.rawToolArguments || config.capture.rawToolResults) {
     throw new TypeError('outcome-loop: raw content capture is not implemented and must stay false')
+  }
+  for (const entry of config.cost.priceTable) {
+    if (!Number.isFinite(entry.pricePerMillionInput) || entry.pricePerMillionInput < 0
+      || !Number.isFinite(entry.pricePerMillionOutput) || entry.pricePerMillionOutput < 0) {
+      throw new TypeError('outcome-loop: cost.priceTable prices must be non-negative finite numbers')
+    }
+    if (entry.currency.trim().length === 0) {
+      throw new TypeError('outcome-loop: cost.priceTable entries need a non-empty currency')
+    }
+    if (!Number.isFinite(entry.effectiveFrom) || entry.effectiveFrom < 0) {
+      throw new TypeError('outcome-loop: cost.priceTable entries need a non-negative effectiveFrom (epoch ms)')
+    }
+    if (entry.source.trim().length === 0) {
+      throw new TypeError('outcome-loop: cost.priceTable entries need a source (provenance)')
+    }
   }
 }
 
@@ -96,4 +111,12 @@ export function apply(ctx: Context, config: ConfigType): void {
   })
 }
 
-export default { name, inject, Config, apply }
+export interface OutcomeLoopPluginEntry {
+  name: string
+  inject: readonly string[]
+  Config: typeof Config
+  apply: (ctx: Context, config: ConfigType) => void
+}
+
+export const defaultExport: OutcomeLoopPluginEntry = { name, inject, Config, apply }
+export default defaultExport
