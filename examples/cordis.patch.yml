@@ -1,0 +1,9 @@
+# dsh-outcome-loop bundle 安装层（dsh plugin add 使用）
+# 与根 cordis.patch.yml 等价；此副本供手动 --patch 与文档引用。
+- insert:
+    - id: outcome-loop
+      name: dsh-outcome-loop/lib/index.js
+    - id: outcome-loop-commands
+      name: dsh-outcome-loop/lib/consumers/commands.js
+    - id: outcome-loop-projection
+      name: dsh-outcome-loop/lib/consumers/projection.js

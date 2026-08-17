@@ -1,0 +1,10 @@
+# dsh-outcome-loop bundle 安装层（dsh plugin add 使用）
+# 插件行通过包名 + 子路径引用，Node 解析定位到已安装的代码（lib/ 为构建产物）。
+# 手动安装（--patch）请使用 lib/ 下对应文件的绝对路径。
+- insert:
+    - id: outcome-loop
+      name: dsh-outcome-loop/lib/index.js
+    - id: outcome-loop-commands
+      name: dsh-outcome-loop/lib/consumers/commands.js
+    - id: outcome-loop-projection
+      name: dsh-outcome-loop/lib/consumers/projection.js
