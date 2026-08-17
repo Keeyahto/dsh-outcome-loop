@@ -35,6 +35,11 @@ export const Config = s.object({
       redactSecrets: s.boolean().default(true),
       redactPersonalData: s.boolean().default(true),
     }),
+  retention: s
+    .object({
+      /** 0 (default) = keep evidence forever; otherwise prune older rows at startup. */
+      evidenceMaxAgeMs: s.number().default(0),
+    }),
   feedback: s
     .object({
       messageFeedback: s.string().default('optional'),
@@ -67,6 +72,9 @@ export function configDigest(config: ConfigType): string {
       observeExisting: config.verification.observeExisting,
       autoRun: config.verification.autoRun,
       llmJudge: config.verification.llmJudge,
+    },
+    retention: {
+      evidenceMaxAgeMs: config.retention.evidenceMaxAgeMs,
     },
     privacy: {
       network: config.privacy.network,

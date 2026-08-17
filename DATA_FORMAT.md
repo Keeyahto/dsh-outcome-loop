@@ -56,7 +56,8 @@ interface Evidence {
   observedAt: number
   workspaceState: { epoch; gitHeadDigest?; changedPathsDigest? }
   fact: <判别联合：command/test-report/file-state/git-scope/diagnostic-count/
-         turn/usage/user-confirmation/feedback/tool-outcome/verifier>
+         turn/usage/user-confirmation/feedback/tool-outcome/verifier/decision>
+         （decision 记录外部集成（如 dsh-code-reference）的先前决策，分类 internal）
   strength: 'strong' | 'medium' | 'weak'
   sensitivity: 'public' | 'internal' | 'confidential' | 'secret' | 'personal-data' | 'unknown-sensitive'
   digest?: string

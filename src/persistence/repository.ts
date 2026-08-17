@@ -36,6 +36,7 @@ export interface Repository {
   /** Idempotent put (deterministic ids); returns whether the row was new. */
   putEvidence(row: EvidenceRow): Promise<boolean>
   listEvidence(contractId: ContractId): EvidenceRow[]
+  deleteEvidenceRow(id: EvidenceId): Promise<void>
   deleteEvidence(contractId: ContractId): Promise<void>
 
   putRun(run: VerificationRun): Promise<void>
@@ -122,6 +123,9 @@ export function createRepository(domain: Domain<typeof outcomeDomainSpec>): Repo
         if (value.contractId === contractId) out.push(detach(value) as EvidenceRow)
       }
       return out
+    },
+    async deleteEvidenceRow(id) {
+      await evidence.delete(id)
     },
     async deleteEvidence(contractId) {
       const keys: EvidenceId[] = []

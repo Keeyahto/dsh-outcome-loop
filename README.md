@@ -45,8 +45,10 @@ Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
 /outcome verify                                     # 运行验收（被动观察，不执行新命令）
 /outcome status                                     # 查看机械验证 + 用户 disposition 双轴结果
 /outcome accept | reject | revise | abandon         # 用户对结果的态度（与机械验证独立）
-/outcome export                                     # 两阶段导出：预览 → 批准 digest
-/outcome export --approve <digest> <contract-id>    # 批准并生成 JSONL
+/outcome export [<contract>]                             # 两阶段导出：预览 → digest
+/outcome export <contract> --approve <digest> --out <path> [--overwrite]
+                                                     # 批准并原子写入 JSONL 文件
+/outcome exports [<contract>]                        # 列出导出 manifest
 /outcome delete <contract-id> --yes                 # 删除 sidecar 数据（会话日志永不触碰）
 ```
 
@@ -76,6 +78,15 @@ await ctx.outcomeLoop.setDisposition({ contractId, status: 'accepted' })
 // 两阶段导出
 const preview = await ctx.outcomeLoop.previewExport({ contractId })
 const receipt = await ctx.outcomeLoop.exportJsonl({ contractId, previewDigest: preview.value.previewDigest })
+
+// 记录 dsh-code-reference（或任意集成）的先前决策证据（§15，只用于用户校准）
+await ctx.outcomeLoop.recordDecisionEvidence({
+  contractId,
+  source: 'dsh-code-reference',
+  decisionId: 'decision-42',
+  strategy: 'reuse',
+  predictedMatch: 0.87,
+})
 ```
 
 完整 API 见 `src/service.ts` 的 `OutcomeLoopApi`。

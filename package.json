@@ -1,6 +1,6 @@
 {
   "name": "dsh-outcome-loop",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "Local-first task outcome ledger & acceptance plugin for DeepSeek Harness (DSH): evidence-backed verification of task completion, zero extra model cost, user-owned sidecar data. 任务结果账本与验收插件：机械证据验收、默认零额外 token、数据本地持有。",
   "type": "module",
   "main": "./lib/index.js",
@@ -21,7 +21,8 @@
     "DATA_FORMAT.md",
     "COMPATIBILITY.md",
     "CHANGELOG.md",
-    "examples"
+    "examples",
+    "docs"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

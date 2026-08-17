@@ -219,6 +219,16 @@ const evidenceFactSchema = z.discriminatedUnion('kind', [
     verdict: z.enum(['pass', 'fail', 'unknown']),
     detail: z.string(),
   }),
+  z.object({
+    kind: 'decision',
+    source: z.string(),
+    decisionId: z.string(),
+    strategy: z.enum(['reuse', 'adapt', 'dependency', 'rewrite']),
+    candidateRef: z.string().optional(),
+    predictedMatch: z.number().min(0).max(1).optional(),
+    predictedEffort: z.object({ files: z.number().int().nonnegative(), lines: z.string() }).optional(),
+    policyDigest: z.string().optional(),
+  }),
 ])
 
 const evidenceRowObject = z.object({

@@ -2,6 +2,22 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.2] - 2026-08-18
+
+### Added
+
+- **导出落盘**：`/outcome export <contract> --approve <digest> --out <path> [--overwrite]` 将批准的 JSONL 原子写入（临时文件 + rename）；路径必须 workspace-relative 且不得逃逸；覆盖需显式 `--overwrite`；新增 `/outcome exports` 列出导出 manifest。
+- **冷会话回放**：验证时若契约 session 无事实日志且存在可选 `sessionPersistence` 服务，先 best-effort 回放权威日志再验证（spec §8.3 规则 5）；无该服务时保守 `unknown`。
+- **保留策略（enterprise-lite）**：`retention.evidenceMaxAgeMs` 配置（默认 0 = 永不过期），启动修复时按窗口裁剪过期证据，契约等权威记录永不触碰。
+- **dsh-code-reference 决策证据桥（§15）**：新增 `decision` 证据类型与 `recordDecisionEvidence()` API（source/decisionId/strategy/predictedMatch/predictedEffort/policyDigest），供 code-reference 或桥接插件提交 PriorDecisionEvidence；分类 internal，永不参与验证判定。
+- **ADR 文档**：`docs/adr/0001–0004`（契约入口 / active 验证门 / sidecar 存储 / 两阶段导出）。
+- 新增测试：命令消费者集成（含原子写、覆盖保护、路径逃逸）、冷回放（有/无 persistence）、projection 单元、保留裁剪、decision 证据。
+
+### Fixed
+
+- `parseArgs` 现正确消费 `--key value` 形式（此前 `--approve <digest>` 的值会落入 positionals）；
+- `/outcome criterion add-command` 不再把子命令词混入命令文本。
+
 ## [0.1.0-beta.1] - 2026-08-18
 
 首个 beta：MVP 全部阶段（0–6）落地。

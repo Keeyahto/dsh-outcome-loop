@@ -49,6 +49,8 @@ export interface OutcomeLoopApi {
   getOutcome(id: ContractId): Promise<OutcomeResult<TaskOutcomeView>>
   previewExport(input: ExportRequest): Promise<OutcomeResult<ExportPreviewResult>>
   exportJsonl(input: ApprovedExportRequest): Promise<OutcomeResult<ExportReceipt>>
+  listExports(contractId: ContractId): Promise<OutcomeResult<readonly ExportManifest[]>>
+  recordDecisionEvidence(input: RecordDecisionEvidenceInput): Promise<OutcomeResult<Evidence>>
   deleteOutcome(input: DeleteOutcomeRequest): Promise<OutcomeResult<DeleteOutcomeReceipt>>
   registerVerifier(provider: VerifierProviderLike): () => void
 }
@@ -92,6 +94,17 @@ export interface SetDispositionInput {
 
 export interface ExportRequest {
   contractId: ContractId
+}
+
+export interface RecordDecisionEvidenceInput {
+  contractId: ContractId
+  source: 'dsh-code-reference' | string
+  decisionId: string
+  strategy: 'reuse' | 'adapt' | 'dependency' | 'rewrite'
+  candidateRef?: string
+  predictedMatch?: number
+  predictedEffort?: { files: number; lines: string }
+  policyDigest?: string
 }
 
 export interface ApprovedExportRequest extends ExportRequest {
@@ -168,6 +181,7 @@ export class OutcomeLoopService extends Service {
   private readonly policy: PolicyContext
   private readonly version: string
   private readonly dshVersion: string | undefined
+  private readonly sessionPersistence: SessionPersistence | undefined
 
   constructor(ctx: Context, options: OutcomeLoopServiceOptions) {
     super(ctx, 'outcomeLoop')
@@ -190,13 +204,14 @@ export class OutcomeLoopService extends Service {
       this.registry.seedCursor(cursor.sessionId, cursor.lastSeq)
     }
 
-    // Startup repair of derived indexes (spec §8.4).
-    void repairIndexes(this.repository).catch((error) => {
+    // Startup repair of derived indexes + opt-in retention (spec §8.4).
+    void repairIndexes(this.repository, { evidenceMaxAgeMs: options.config.retention.evidenceMaxAgeMs }).catch((error) => {
       this.log('warn', `outcome-loop: index repair failed: ${error instanceof Error ? error.message : String(error)}`)
     })
 
     // Observation + replay (spec §8.2, §8.3).
-    const sessionPersistence = ctx.get('sessionPersistence') as SessionPersistence | undefined
+    this.sessionPersistence = ctx.get('sessionPersistence') as SessionPersistence | undefined
+    const sessionPersistence = this.sessionPersistence
     const deps: ReplayDeps = {
       ctx,
       registry: this.registry,
@@ -352,6 +367,24 @@ export class OutcomeLoopService extends Service {
       return err('policy-denied', 'verification is disabled by configuration')
     }
     try {
+      // Cold session without observed facts: best-effort replay through the
+      // optional session-persistence service (spec §8.3 rule 5).
+      if (this.registry.getLog(contract.sessionId) === undefined && this.sessionPersistence !== undefined) {
+        const { fillColdSession } = await import('./dsh/observer.ts')
+        await fillColdSession(
+          {
+            ctx: this.ctx,
+            registry: this.registry,
+            repository: this.repository,
+            queue: this.queue,
+            hasContract: (sessionId) => this.contractSessions.has(sessionId),
+            logger: { warn: (message, ...args) => this.log('warn', message, ...args) },
+            sessionPersistence: this.sessionPersistence,
+          },
+          contract.sessionId,
+        )
+        await new Promise((resolve) => this.queue.enqueue({ sessionId: contract.sessionId, run: () => Promise.resolve().then(resolve) }))
+      }
       return await verifyContract({ contract, signal: input.signal }, {
         repository: this.repository,
         registry: this.registry,
@@ -493,6 +526,33 @@ export class OutcomeLoopService extends Service {
     } catch (error) {
       throw infrastructureError(error, 'exportJsonl')
     }
+  }
+
+  // ═══ Prior-decision evidence (§15, dsh-code-reference integration) ═══
+
+  async recordDecisionEvidence(input: RecordDecisionEvidenceInput): Promise<OutcomeResult<Evidence>> {
+    return this.recordEvidence({
+      contractId: input.contractId,
+      source: 'import',
+      strength: 'medium',
+      sensitivity: 'internal',
+      fact: {
+        kind: 'decision',
+        source: input.source,
+        decisionId: input.decisionId,
+        strategy: input.strategy,
+        ...(input.candidateRef === undefined ? {} : { candidateRef: input.candidateRef }),
+        ...(input.predictedMatch === undefined ? {} : { predictedMatch: input.predictedMatch }),
+        ...(input.predictedEffort === undefined ? {} : { predictedEffort: input.predictedEffort }),
+        ...(input.policyDigest === undefined ? {} : { policyDigest: input.policyDigest }),
+      },
+    })
+  }
+
+  async listExports(contractId: ContractId): Promise<OutcomeResult<readonly ExportManifest[]>> {
+    const contract = this.repository.getContract(contractId)
+    if (contract === undefined) return err('contract-not-found', 'no such contract')
+    return ok(this.repository.listExportManifests(contractId))
   }
 
   // ═══ Delete ═══

@@ -253,6 +253,21 @@ export type EvidenceFact =
       verdict: 'pass' | 'fail' | 'unknown'
       detail: string
     }
+  | {
+      /**
+       * A prior decision recorded by an external integration (spec §15,
+       * e.g. dsh-code-reference). Lineage/calibration data for the user's
+       * own routing and reuse decisions — never success causation.
+       */
+      kind: 'decision'
+      source: 'dsh-code-reference' | string
+      decisionId: string
+      strategy: 'reuse' | 'adapt' | 'dependency' | 'rewrite'
+      candidateRef?: string
+      predictedMatch?: number
+      predictedEffort?: { files: number; lines: string }
+      policyDigest?: string
+    }
 
 export interface Evidence {
   schemaVersion: typeof EVIDENCE_SCHEMA_VERSION

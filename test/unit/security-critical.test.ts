@@ -147,6 +147,18 @@ describe('active verifier paths', () => {
   })
 })
 
+describe('decision evidence (§15 code-reference bridge)', () => {
+  it('classifyFact treats decisions as internal', async () => {
+    const { classifyFact } = await import('../../src/export/redact.ts')
+    expect(classifyFact({ kind: 'decision', source: 'dsh-code-reference', decisionId: 'd1', strategy: 'reuse' })).toBe('internal')
+  })
+
+  it('impliesVerdict ignores decisions (lineage, not causation)', async () => {
+    const { impliesVerdict } = await import('../../src/verification/engine.ts')
+    expect(impliesVerdict({ kind: 'decision', source: 'dsh-code-reference', decisionId: 'd1', strategy: 'reuse' }, { kind: 'custom', providerId: 'x', params: {} })).toBe('unknown')
+  })
+})
+
 describe('repair (spec §8.4)', () => {
   it('removes orphaned indexes and prunes cursors', async () => {
     const contractA = contract()
@@ -168,5 +180,31 @@ describe('repair (spec §8.4)', () => {
     expect(report.orphanedRuns).toBe(1)
     expect(report.orphanedDispositions).toBe(1)
     expect(report.prunedCursors).toBe(1)
+  })
+
+  it('opt-in retention prunes only old evidence and never contracts', async () => {
+    const contractA = contract()
+    const rows = [
+      { id: 'ole-old' as never, contractId: contractA.id, observedAt: 10 },
+      { id: 'ole-new' as never, contractId: contractA.id, observedAt: 950 },
+    ]
+    let deleted = 0
+    const repo = {
+      listContracts: () => [contractA],
+      listRunsForAll: () => [],
+      deleteRun: async () => undefined,
+      listDispositionsForAll: () => [],
+      deleteDisposition: async () => undefined,
+      listCursors: () => [],
+      deleteCursor: async () => undefined,
+      listEvidence: () => rows,
+      deleteEvidenceRow: async () => { deleted += 1 },
+    } as unknown as Repository
+    const report = await repairIndexes(repo, { evidenceMaxAgeMs: 100, now: 1000 })
+    expect(report.prunedEvidence).toBe(1)
+    expect(deleted).toBe(1)
+    // Retention disabled by default: nothing pruned.
+    const reportOff = await repairIndexes(repo, { evidenceMaxAgeMs: 0, now: 1000 })
+    expect(reportOff.prunedEvidence).toBe(0)
   })
 })

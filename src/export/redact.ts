@@ -96,6 +96,7 @@ export function classifyFact(fact: EvidenceFact): SensitivityClass {
     case 'feedback':
     case 'tool-outcome':
     case 'verifier':
+    case 'decision':
       return 'internal'
   }
 }

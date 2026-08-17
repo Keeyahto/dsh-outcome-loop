@@ -42,7 +42,11 @@ consumers (命令/投影)  ──只调用──▶  service (ctx.outcomeLoop)
 - 可选 `sessionPersistence.inspect()` 用于冷会话读取（best-effort，缺失时核心功能照常）；
 - 重复投递由 high-water seq 去重；seq gap 不允许猜测 —— 无权威日志可读时，该 session 不产生事实（criterion 保守为 `unknown`）。
 
-### 2.3 验证（`verification/engine.ts`）
+### 2.3 冷会话回放（spec §8.3 规则 5）
+
+验证时若契约 session 尚无事实日志且挂载了可选 `sessionPersistence`，`service.verify` 先 best-effort 回放权威日志（`inspect()`）再验证；无该服务时该 session 不产生事实，criterion 保守 `unknown`。
+
+### 2.4 验证（`verification/engine.ts`）
 
 1. 被动适配器从事实日志 + 先前证据行计算每个 criterion 的初步判定（spec §12.2：观察不到足够事实 → `unknown`，**绝不**为拿标签自动重跑命令）；
 2. 仅当所有策略门（部署 `autoRun` + 契约 `verificationPolicy.autoRun` + scope `allowActiveVerification` + verifier 白名单 + 绝对 workspaceRoot）都打开时，才运行 active verifier（spec §12.3：argv+cwd、无 shell 拼接、env allowlist、timeout、output cap、AbortSignal、默认只读、默认无网络）；
@@ -52,14 +56,14 @@ consumers (命令/投影)  ──只调用──▶  service (ctx.outcomeLoop)
 
 标签强度由 `evidenceLabelStrength()` 从实际证据行的 strength 计算：strong（机械确定性）/ medium（用户确认）/ weak（仅 judge，本版本无 judge）/ unknown。
 
-### 2.4 导出（`export/`）
+### 2.5 导出（`export/`）
 
 preview（`previewExport`）→ 用户批准 digest（`exportJsonl` 重算并比对，内容变化即 `export-approval-invalid`）→ 写入。导出记录由权威 records 派生，永不反向修改账本。
 
 ## 3. 存储设计（spec §8.4）
 
 - domain `outcome_loop` v1，表：`contracts` / `evidence` / `verification_runs` / `dispositions` / `session_cursors` / `exports`；
-- 权威 record 先写、派生 index 后写；所有派生 index 可由权威 records 重建（`repair.ts` 在启动时清理孤儿）；
+- 权威 record 先写、派生 index 后写；所有派生 index 可由权威 records 重建（`repair.ts` 在启动时清理孤儿 + 可选保留窗口裁剪 `retention.evidenceMaxAgeMs`，默认 0 不裁剪）；
 - 单进程内 storage-domain 的单写链提供每域串行化；跨进程 CAS 不做宣称（见 SECURITY.md §多进程）；
 - 返回给调用方的对象一律 detached + frozen。
 
@@ -95,4 +99,4 @@ preview（`previewExport`）→ 用户批准 digest（`exportJsonl` 重算并比
 
 ## 7. 与 dsh-code-reference 的可选集成
 
-outcome-loop 暴露 `recordEvidence`（source: `'import'`）作为通用 decision-evidence 入口；code-reference 或桥接插件可主动提交 `PriorDecisionEvidence`（决策 id、strategy、predictedMatch/effort、policyDigest）。集成方不得 import 本包内部文件；启发式相似度**不**等于真实复用收益；候选仓库完整代码/README 永不保存。
+outcome-loop 暴露 `recordDecisionEvidence()`（source: `'dsh-code-reference'` 等，`decision` 证据类型）作为通用 decision-evidence 入口；code-reference 或桥接插件可主动提交 PriorDecisionEvidence（决策 id、strategy、predictedMatch/effort、policyDigest）。`decision` 证据分类 internal、永不参与验证判定（`impliesVerdict` 返回 unknown）——它是用户的校准数据，不是成功因果。集成方不得 import 本包内部文件；启发式相似度**不**等于真实复用收益；候选仓库完整代码/README 永不保存。

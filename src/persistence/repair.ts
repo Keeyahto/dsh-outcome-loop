@@ -20,10 +20,19 @@ export interface RepairReport {
   orphanedRuns: number
   orphanedDispositions: number
   prunedCursors: number
+  prunedEvidence: number
 }
 
-export async function repairIndexes(repo: Repository): Promise<RepairReport> {
-  const report: RepairReport = { orphanedRuns: 0, orphanedDispositions: 0, prunedCursors: 0 }
+export interface RepairOptions {
+  /** Prune evidence older than this many ms; 0 disables retention. */
+  evidenceMaxAgeMs: number
+  now?: number
+}
+
+export async function repairIndexes(repo: Repository, options?: RepairOptions): Promise<RepairReport> {
+  const report: RepairReport = { orphanedRuns: 0, orphanedDispositions: 0, prunedCursors: 0, prunedEvidence: 0 }
+  const retention = options?.evidenceMaxAgeMs ?? 0
+  const now = options?.now ?? Date.now()
 
   const contracts = new Set(repo.listContracts().map((c) => c.id))
 
@@ -47,6 +56,20 @@ export async function repairIndexes(repo: Repository): Promise<RepairReport> {
     if (!contractSessions.has(cursor.sessionId)) {
       await repo.deleteCursor(cursor.sessionId)
       report.prunedCursors += 1
+    }
+  }
+
+  // Opt-in retention: prune evidence older than the configured window.
+  // The authoritative records (contracts) are never touched; a later
+  // verification re-derives what it needs from facts.
+  if (retention > 0) {
+    for (const contract of repo.listContracts()) {
+      for (const row of repo.listEvidence(contract.id)) {
+        if (now - row.observedAt > retention) {
+          await repo.deleteEvidenceRow(row.id)
+          report.prunedEvidence += 1
+        }
+      }
     }
   }
 

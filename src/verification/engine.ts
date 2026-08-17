@@ -77,6 +77,7 @@ export function impliesVerdict(fact: EvidenceFact, spec: CriterionSpecification)
     case 'usage':
     case 'feedback':
     case 'tool-outcome':
+    case 'decision':
       return 'unknown'
   }
 }
@@ -93,6 +94,7 @@ const SENSITIVITY_OF: Record<EvidenceFact['kind'], SensitivityClass> = {
   feedback: 'internal',
   'tool-outcome': 'internal',
   verifier: 'internal',
+  decision: 'internal',
 }
 
 /** Manual criteria resolve through user disposition (medium evidence). */
