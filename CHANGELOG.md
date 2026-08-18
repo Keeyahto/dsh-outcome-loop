@@ -2,6 +2,12 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.6] - 2026-08-18
+
+### Changed
+
+- **peer ranges 兼容修复**（Awesome 收录要求）：`@deepseek-ai/dsh-session` 与 `@deepseek-ai/dsh-storage-domain` 的 peer range 由 `>=0.0.1-rc.1` 改为 `>=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0`——旧范围无法匹配 `0.1.0-rc.7`（预发布语义），新范围同时覆盖已发布的 `0.0.1-rc.x` 与 `0.1.0-rc.x` 系列。无行为变化。
+
 ## [0.1.0-beta.5] - 2026-08-18
 
 ### Added

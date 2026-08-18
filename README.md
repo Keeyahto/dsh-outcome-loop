@@ -23,7 +23,7 @@ pnpm build
 pnpm pack   # 生成 dsh-outcome-loop-<version>.tgz
 
 # 安装进 DSH profile
-dsh plugin --profile <name> add ./dsh-outcome-loop-0.1.0-beta.5.tgz
+dsh plugin --profile <name> add ./dsh-outcome-loop-0.1.0-beta.6.tgz
 ```
 
 Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
