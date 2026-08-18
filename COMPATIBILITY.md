@@ -23,7 +23,7 @@
 | 可选：`ctx.tokenMeter` | `@deepseek-ai/dsh-token-meter` | 预留估计路径（当前只用 durable usage facts） |
 | 可选：`ctx.messageFeedback` | `@deepseek-ai/dsh-message-feedback` | rating 计数桥 |
 | 可选：`ctx.sessionProjections` | `@deepseek-ai/dsh-session-projection` | projection consumer（headless 安全） |
-| 可选：`ctx.commands` | `@deepseek-ai/dsh-commands` | `/outcome` 命令 consumer |
+| 可选：`ctx.commands` | `@deepseek-ai/dsh-commands` | `/outcome` 命令 consumer；`/contribute` 贡献 consumer（默认未安装） |
 
 所有可选服务通过 `ctx.get()` 探测；缺失时核心功能照常工作。必需服务缺失时插件保持 pending（Cordis `inject` 语义）。
 

@@ -33,6 +33,7 @@ Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
 | `outcome-loop` | 核心服务 `ctx.outcomeLoop` + session 观察器 + 本地 sidecar 存储 |
 | `outcome-loop-commands` | 人类命令 `/outcome`（创建契约、验收、反馈、导出） |
 | `outcome-loop-projection` | 可选 Web session 投影（headless 环境自动跳过） |
+| `outcome-loop-contribute` | **默认未安装**：贡献模式数据集准备（需手动添加行 + `contribute.enabled: true`，见下） |
 
 ### 使用（通过 `/outcome` 命令）
 
@@ -55,8 +56,30 @@ Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
 /outcome export-contract <id> --out <path>          # 导出契约文件
 /outcome cost [<contract>] [--summary]              # token 用量（可选价格表 → 货币成本估计；--summary 聚合多契约）
 /outcome calibration [<contract>]                 # dsh-code-reference 决策校准（预测 × 实际）
+/outcome skills [--out <path>]                    # Skill 候选（只读聚合，人工评估，永不自动应用）
 /outcome delete <contract-id> --yes                 # 删除 sidecar 数据（会话日志永不触碰）
 ```
+
+### 贡献模式（默认关闭，ADR-0005）
+
+贡献模式是独立、默认未安装的消费者。手动添加到 profile 的 patch：
+
+```yaml
+- insert:
+    - id: outcome-loop-contribute
+      name: dsh-outcome-loop/lib/consumers/contribute.js
+      config:
+        enabled: true
+```
+
+```text
+/contribute preview <contract>                 # 批次预览（字段/敏感命中/digest）
+/contribute approve <digest> <contract> --out <dir> [--summary-only]
+                                               # 写入 consent manifest + records.jsonl（或 summary.json）
+/contribute revoke <contract> --out <dir> --yes  # 撤回 = 删除数据集目录
+```
+
+数据集只包含导出 v1 最小字段（无消息正文/代码/凭据/绝对路径），确定性脱敏门在任何敏感命中时阻断整批；插件**不执行任何上传**，交付由用户自行决定。
 
 ### 通过 Host API
 

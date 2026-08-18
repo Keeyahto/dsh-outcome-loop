@@ -116,6 +116,14 @@ preview（`previewExport`）→ 用户批准 digest（`exportJsonl` 重算并比
 - `dsh/calibration.ts`：decision 证据 × 实际结果的相关性（observation 六分类），纯描述性；
 - `/outcome cost --summary`：跨契约 token 聚合，仅校准用途；价格永不硬编码（`test/privacy` 断言无价格字面量）。
 
-## 10. 与 dsh-code-reference 的可选集成
+## 10. Skill 候选（beta.5，§21.7.5）
+
+`dsh/skills.ts` 从用户自己的账本聚合主题与验收模式，输出 `SkillsReport`（主题行 + 候选建议）。候选仅在「某主题 ≥2 个通过契约共享同一验收种类」时出现，且永远只是**展示给人工**——不自动应用、不修改 skill、不把单次成功轨迹固化为规则（§22；测试断言输出文案包含 "never auto-applied"）。
+
+## 11. 贡献模式（beta.5，ADR-0005）
+
+独立消费者 `outcome-loop-contribute`：默认未安装、默认禁用；启用后 `/contribute` 提供 preview → approve（确定性脱敏门阻断任何敏感命中）→ 数据集目录（版本化 consent manifest + records/summary）；revoke = 删除目录。**无上传通道**；`cordis.patch.yml` 不含该行（见 README 手动安装示例）。
+
+## 12. 与 dsh-code-reference 的可选集成
 
 outcome-loop 暴露 `recordDecisionEvidence()`（source: `'dsh-code-reference'` 等，`decision` 证据类型）作为通用 decision-evidence 入口；code-reference 或桥接插件可主动提交 PriorDecisionEvidence（决策 id、strategy、predictedMatch/effort、policyDigest）。`decision` 证据分类 internal、永不参与验证判定（`impliesVerdict` 返回 unknown）——它是用户的校准数据，不是成功因果。集成方不得 import 本包内部文件；启发式相似度**不**等于真实复用收益；候选仓库完整代码/README 永不保存。

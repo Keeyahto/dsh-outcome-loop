@@ -71,7 +71,11 @@ interface Evidence {
 
 基础设施错误（storage/版本/卸载）以 reject 或 `storage-error` 呈现，**永不**伪装成业务失败；用户取消不算 verifier 失败；证据缺失不算 criterion fail。
 
-## 3. 开放导出格式：`outcome-loop.export.v1`
+## 3. 贡献数据集：`outcome-loop.contribution.v1`（ADR-0005，默认未安装）
+
+目录结构：`manifest.json`（版本化同意记录：schema/consent version、created_at、contract_id、record_count、summary_only、fields、license、recipient=user-delivered、purpose、retention、compensation、withdrawal、preview_digest、插件/DSH 版本、sensitivity_counts）+ `records.jsonl`（导出 v1 记录子集）或 `summary.json`（仅聚合）。任何记录行在确定性脱敏门下命中敏感模式 → 整批 `policy-denied` 阻断。撤回 = 删除目录。
+
+## 4. 开放导出格式：`outcome-loop.export.v1`
 
 JSONL，一行一条记录，稳定键序，可独立解析，可 diff。每行示例（合成数据）：
 

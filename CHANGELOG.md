@@ -2,6 +2,21 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.5] - 2026-08-18
+
+### Added
+
+- **Skill 候选报告（阶段 7 第 5 项，§21.7.5/§22）**：`/outcome skills [--out <path>]` 从用户自己的账本聚合主题（CJK 二元组 + 英文关键词）、各主题的通过率/失败率、criterion 种类使用计数、常见失败注记与 token 分布；当某主题 ≥2 个通过契约都带有同一验收种类时给出候选建议——**纯展示、人工评估，插件绝不自动应用规则或修改 skill**（§22 禁令有测试断言）。报告可写入 workspace 文件。
+- **贡献模式插件（阶段 7 第 6 项，ADR-0005 落地）**：独立消费者 `outcome-loop-contribute`，**不在默认 patch**（用户手动添加行）且 `contribute.enabled` 默认 false（关闭时注册零命令）：
+  - `/contribute preview <contract>`：批次预览（记录数、字段、敏感命中、digest、secret 阻断提示）；
+  - `/contribute approve <digest> <contract> --out <dir> [--summary-only]`：确定性脱敏门（任何 redaction 命中即阻断整批，`policy-denied`）→ 写入 `manifest.json`（版本化同意记录：范围/许可/保留/补偿/撤回方式/字段清单）+ `records.jsonl`（导出 v1 记录，无消息/代码/凭据）或 `summary.json`（仅聚合）；目录已存在则拒绝；
+  - `/contribute revoke <contract> --out <dir> --yes`：撤回 = 删除数据集目录；
+  - 无任何上传通道（recipient: user-delivered）；路径 workspace 内、防逃逸。
+
+### Security
+
+- 贡献数据集默认零模型调用、默认无网络；secret 类证据内容被确定性阻断（测试覆盖）；字段清单 = 导出 v1 最小集。
+
 ## [0.1.0-beta.4] - 2026-08-18
 
 ### Added

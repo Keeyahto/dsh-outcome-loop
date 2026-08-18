@@ -329,6 +329,38 @@ export function apply(ctx: Context, config: CommandsConfig): void {
             if (!write.ok) return { kind: 'error', text: formatError(write.error) }
             return { kind: 'success', text: `Contract exported to ${write.value}` }
           }
+          case 'skills': {
+            const { buildSkillsReport } = await import('../dsh/skills.ts')
+            const { usageFromFacts } = await import('../dsh/token-bridge.ts')
+            const contracts = await service.listContracts({ sessionId, limit: 100 })
+            if (!contracts.ok) return { kind: 'error', text: formatError(contracts.error) }
+            const report = buildSkillsReport(
+              contracts.value,
+              (c) => service.repository.listRuns(c.id).at(-1),
+              (c) => usageFromFacts(service.registry.getLog(c.sessionId)).totalTokens ?? 0,
+            )
+            const out: string[] = []
+            out.push(`Skills report: ${report.contractsConsidered} contract(s), ${report.topics.length} topic(s)`)
+            for (const topic of report.topics.slice(0, 10)) {
+              const kinds = topic.criterionKinds.map((k) => `${k.kind}(${k.passedCount}/${k.count})`).join(' ')
+              out.push(`  «${topic.topic}»: ${topic.contracts} contract(s), ${topic.passed} passed / ${topic.failed} failed / ${topic.inconclusive} inconclusive, ${topic.totalTokens} tokens`)
+              if (kinds.length > 0) out.push(`    criteria: ${kinds}`)
+              for (const note of topic.commonFailureNotes.slice(0, 2)) out.push(`    failure: ${note}`)
+            }
+            if (report.candidates.length > 0) {
+              out.push('Candidates (human review only — never auto-applied, spec §22):')
+              for (const candidate of report.candidates) out.push(`  - ${candidate.suggestion}`)
+            } else {
+              out.push('No candidates (need ≥2 passing contracts sharing a topic).')
+            }
+            const outPath = args.options.get('out')
+            if (outPath !== undefined) {
+              const write = await writeScopedFile(invocation, outPath, `${JSON.stringify(report, null, 2)}\n`, args.options.has('overwrite'))
+              if (!write.ok) return { kind: 'error', text: formatError(write.error) }
+              out.push(`Report written to ${write.value}`)
+            }
+            return { kind: 'success', text: out.join('\n') }
+          }
           case 'calibration': {
             const contracts = await resolveContracts(service, sessionId, args.positionals[1])
             if (!contracts.ok) return { kind: 'error', text: formatError(contracts.error) }

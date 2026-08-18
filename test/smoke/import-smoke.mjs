@@ -24,7 +24,7 @@ async function main() {
   assert.ok(plugin.Config !== undefined, 'plugin.Config (schemastery) must be present')
 
   // All patch rows must resolve to real built modules.
-  const rows = ['lib/index.js', 'lib/consumers/commands.js', 'lib/consumers/projection.js']
+  const rows = ['lib/index.js', 'lib/consumers/commands.js', 'lib/consumers/projection.js', 'lib/consumers/contribute.js']
   for (const row of rows) {
     const mod = await import(`../../${row}`)
     assert.ok(mod.default || mod.apply, `${row} must export a plugin`)
