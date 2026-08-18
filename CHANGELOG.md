@@ -2,6 +2,12 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.7] - 2026-08-18
+
+### Fixed
+
+- **声明缺失的运行时 peer**（Awesome 收录指南 §peerDependencies）：`@deepseek-ai/schemastery` 被 config/commands/contribute 在运行时 import，此前只存在于 devDependencies——pnpm 严格依赖布局下 `dsh plugin add` 后可能解析失败。现声明为必需 peer（`^3.18.1`）；`@deepseek-ai/dsh-session-persistence` 被公开类型引用，声明为 optional peer。无行为变化。
+
 ## [0.1.0-beta.6] - 2026-08-18
 
 ### Changed
