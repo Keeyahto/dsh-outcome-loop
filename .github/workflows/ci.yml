@@ -37,7 +37,9 @@ jobs:
           # Resolve the packed entry against the repo's own dependency tree
           # (the plugin always runs inside a DSH profile where peers exist).
           ln -s "$PWD/node_modules" /tmp/pack/package/node_modules
-          node -e "import('/tmp/pack/package/lib/index.js').then(m => { if (m.default.name !== 'outcome-loop') process.exit(1) })"
-          node -e "import('/tmp/pack/package/lib/consumers/commands.js').then(m => { if (m.default.name !== 'outcome-loop-commands') process.exit(1) })"
-          node -e "import('/tmp/pack/package/lib/consumers/projection.js').then(m => { if (m.default.name !== 'outcome-loop-projection') process.exit(1) })"
-          node -e "import('/tmp/pack/package/lib/consumers/contribute.js').then(m => { if (m.default.name !== 'outcome-loop-contribute') process.exit(1) })"
+          # DSH loads plugins via named exports (or the default object):
+          # every row must expose name + apply.
+          node -e "import('/tmp/pack/package/lib/index.js').then(m => { const p = m.default ?? m; if (p.name !== 'outcome-loop' || typeof p.apply !== 'function') process.exit(1) })"
+          node -e "import('/tmp/pack/package/lib/consumers/commands.js').then(m => { const p = m.default ?? m; if (p.name !== 'outcome-loop-commands' || typeof p.apply !== 'function') process.exit(1) })"
+          node -e "import('/tmp/pack/package/lib/consumers/projection.js').then(m => { const p = m.default ?? m; if (p.name !== 'outcome-loop-projection' || typeof p.apply !== 'function') process.exit(1) })"
+          node -e "import('/tmp/pack/package/lib/consumers/contribute.js').then(m => { const p = m.default ?? m; if (p.name !== 'outcome-loop-contribute' || typeof p.apply !== 'function') process.exit(1) })"

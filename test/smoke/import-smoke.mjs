@@ -23,12 +23,20 @@ async function main() {
   assert.equal(typeof plugin.apply, 'function', 'plugin.apply must be a function')
   assert.ok(plugin.Config !== undefined, 'plugin.Config (schemastery) must be present')
 
-  // All patch rows must resolve to real built modules.
-  const rows = ['lib/index.js', 'lib/consumers/commands.js', 'lib/consumers/projection.js', 'lib/consumers/contribute.js']
-  for (const row of rows) {
+  // All patch rows must resolve to real built modules exposing name + apply
+  // (DSH loads plugins via named exports or the default object).
+  const rows = [
+    ['lib/index.js', 'outcome-loop'],
+    ['lib/consumers/commands.js', 'outcome-loop-commands'],
+    ['lib/consumers/projection.js', 'outcome-loop-projection'],
+    ['lib/consumers/contribute.js', 'outcome-loop-contribute'],
+  ]
+  for (const [row, expectedName] of rows) {
     const mod = await import(`../../${row}`)
-    assert.ok(mod.default || mod.apply, `${row} must export a plugin`)
-    console.log(`smoke ok: ${row}`)
+    const plugin = mod.default ?? mod
+    assert.ok(plugin && typeof plugin.apply === 'function', `${row} must export a plugin with apply()`)
+    assert.equal(plugin.name, expectedName, `${row} plugin name mismatch`)
+    console.log(`smoke ok: ${row} (${expectedName})`)
   }
 
   // Service class surface.
