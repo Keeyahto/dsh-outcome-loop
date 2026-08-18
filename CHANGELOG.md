@@ -2,6 +2,19 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.4] - 2026-08-18
+
+### Added
+
+- **企业策略（阶段 7 第 2 项，spec §5.2/§11）**：`enterprise` 配置段（`requireCriteria`/`minCriteria`/`mustIncludeKinds`/`allowedVerifierIds`），仅在 `mode: 'enterprise'` 时生效；`createContract`/`reviseContract` 纯函数强制（`enforceEnterprisePolicy`）。策略只存在于部署配置，仓库内容永不授予策略（ADR-0006）。
+- **决策校准报告（阶段 7 第 3 项，§15）**：`/outcome calibration [<contract>]` 关联 decision 证据（predictedMatch/predictedEffort/strategy）与实际结果（验证状态、criterion 通过数、token、disposition、标签强度），输出逐条 observation（predicted-and-passed 等）+ 汇总（预测均值、confirmed reuse）。纯描述性、本地、确定性，不驱动路由。
+- **成本汇总（阶段 7 第 4 项，§8.6）**：`/outcome cost --summary` 输出多契约聚合（总调用、总 in/out token、out/in 比），作为用户判断任务成本画像的校准数据；不自动路由、不硬编码价格。
+- **ADR-0005（贡献插件设计）**：记录贡献模式的独立、默认未安装实现要求（§5.3 全项：主动开启、披露、逐批预览、脱敏阻断、字段选择、摘要模式、同意记录、撤回、零模型调用），排期在 LLM Judge 之前。
+
+### Security
+
+- 企业策略字段全部可选、默认关闭；personal 模式完全不受影响；不允许通过 revise 绕过策略。
+
 ## [0.1.0-beta.3] - 2026-08-18
 
 ### Added

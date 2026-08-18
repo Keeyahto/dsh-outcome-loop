@@ -107,6 +107,15 @@ preview（`previewExport`）→ 用户批准 digest（`exportJsonl` 重算并比
 
 `/outcome import` / `export-contract` 使用版本化 JSON 文件（`src/export/contract.ts`）。文件是用户显式指向的输入：不自动发现、不隐式信任，逐字段 zod 校验；导入契约沿用保守策略默认（`autoRun: false`、`private-only`）。注意：契约文件包含 explicit goal 文本（用户自有数据），与**导出记录**（默认最小化、只含 digest）是两回事。
 
-## 8. 与 dsh-code-reference 的可选集成
+## 8. 企业策略（beta.4，ADR-0006）
+
+`enforceEnterprisePolicy`（纯函数，`domain/aggregate.ts`）在 `createContract`/`reviseContract` 处强制部署配置中的 `enterprise` 段（仅 `mode: 'enterprise'`）。策略来源**只有**部署配置；workspace 文件永不读取为策略。verifier 白名单、必需 criterion 种类、最小 criterion 数均可强制。
+
+## 9. 校准与成本（§15、§8.6）
+
+- `dsh/calibration.ts`：decision 证据 × 实际结果的相关性（observation 六分类），纯描述性；
+- `/outcome cost --summary`：跨契约 token 聚合，仅校准用途；价格永不硬编码（`test/privacy` 断言无价格字面量）。
+
+## 10. 与 dsh-code-reference 的可选集成
 
 outcome-loop 暴露 `recordDecisionEvidence()`（source: `'dsh-code-reference'` 等，`decision` 证据类型）作为通用 decision-evidence 入口；code-reference 或桥接插件可主动提交 PriorDecisionEvidence（决策 id、strategy、predictedMatch/effort、policyDigest）。`decision` 证据分类 internal、永不参与验证判定（`impliesVerdict` 返回 unknown）——它是用户的校准数据，不是成功因果。集成方不得 import 本包内部文件；启发式相似度**不**等于真实复用收益；候选仓库完整代码/README 永不保存。

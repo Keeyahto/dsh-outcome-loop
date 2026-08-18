@@ -28,7 +28,7 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export const VERSION = '0.1.0-beta.3'
+export const VERSION = '0.1.0-beta.4'
 
 /** Validate config at load time; fail loud on impossible values. */
 export function validateConfig(config: ConfigType): void {

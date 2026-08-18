@@ -157,6 +157,45 @@ function specificationLabel(spec: CriterionSpecification): string {
   }
 }
 
+/**
+ * Enterprise policy constraints (spec §5.2, §11). Policy lives ONLY in the
+ * deployment config (the same trusted channel as autoRun) — repo/workspace
+ * content can never set or relax it. Enforcement is pure: the service passes
+ * the resolved constraints in, this function returns a business error.
+ */
+export interface EnterprisePolicyConstraints {
+  /** Only enforced when the deployment mode is 'enterprise'. */
+  active: boolean
+  requireCriteria: boolean
+  minCriteria: number
+  mustIncludeKinds: readonly string[]
+  /** Non-empty ⇒ contract verifier allowlists may not contain other ids. */
+  allowedVerifierIds: readonly string[]
+}
+
+export function enforceEnterprisePolicy(
+  contract: TaskContract,
+  policy: EnterprisePolicyConstraints,
+): OutcomeResult<void> {
+  if (!policy.active) return ok(undefined)
+  if (policy.requireCriteria && contract.criteria.length < policy.minCriteria) {
+    return err('policy-denied', `enterprise policy requires at least ${policy.minCriteria} acceptance criteria, got ${contract.criteria.length}`)
+  }
+  const kinds = new Set(contract.criteria.map((c) => c.kind))
+  for (const required of policy.mustIncludeKinds) {
+    if (!kinds.has(required as AcceptanceCriterion['kind'])) {
+      return err('policy-denied', `enterprise policy requires a '${required}' criterion`)
+    }
+  }
+  if (policy.allowedVerifierIds.length > 0) {
+    const extra = contract.verificationPolicy.allowedVerifierIds.filter((id) => !policy.allowedVerifierIds.includes(id))
+    if (extra.length > 0) {
+      return err('policy-denied', `enterprise policy forbids verifier ids: ${extra.join(', ')}`)
+    }
+  }
+  return ok(undefined)
+}
+
 /** Revise a contract: bump revision, replace criteria/policy, keep identity. */
 export function reviseContract(
   contract: TaskContract,

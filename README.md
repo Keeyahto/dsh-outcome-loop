@@ -53,7 +53,8 @@ Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
 /outcome exports [<contract>]                        # 列出导出 manifest
 /outcome import <path>                              # 导入结构化 Task Contract 文件（outcome-loop.contract.v1）
 /outcome export-contract <id> --out <path>          # 导出契约文件
-/outcome cost [<contract>]                          # token 用量（可选价格表 → 货币成本估计）
+/outcome cost [<contract>] [--summary]              # token 用量（可选价格表 → 货币成本估计；--summary 聚合多契约）
+/outcome calibration [<contract>]                 # dsh-code-reference 决策校准（预测 × 实际）
 /outcome delete <contract-id> --yes                 # 删除 sidecar 数据（会话日志永不触碰）
 ```
 

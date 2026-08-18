@@ -86,9 +86,11 @@ describe('default privacy gates (spec §19.3)', () => {
     expect(eventsSource).toContain('contentHash')
   })
 
-  it('no pricing table exists anywhere', () => {
+  it('no hardcoded prices anywhere (only the user-configured schema)', () => {
     const sources = builtFiles().map((f) => readFileSync(f, 'utf8')).join('\n')
-    // No price-table structure, no currency constants, no per-million math.
-    expect(sources).not.toMatch(/price\s*table|price\s*per|per\s*million|usd|rmb|¥/i)
+    // The optional priceTable CONFIG carries user values — but the plugin
+    // itself must never hardcode a price or currency literal.
+    expect(sources).not.toMatch(/pricePerMillion(Input|Output)\s*[:=]\s*\d|\.\d{2,}\s*\/\s*million/i)
+    expect(sources).not.toMatch(/usd|rmb|¥/i)
   })
 })

@@ -40,6 +40,17 @@ export const Config: ReturnType<typeof s.object> = s.object({
       /** 0 (default) = keep evidence forever; otherwise prune older rows at startup. */
       evidenceMaxAgeMs: s.number().default(0),
     }),
+  enterprise: s
+    .object({
+      /**
+       * Enterprise policy (spec §5.2). ONLY honored in deployment config —
+       * never from workspace files. Active only when mode === 'enterprise'.
+       */
+      requireCriteria: s.boolean().default(false),
+      minCriteria: s.number().default(1),
+      mustIncludeKinds: s.array(s.string()).default([]),
+      allowedVerifierIds: s.array(s.string()).default([]),
+    }),
   cost: s
     .object({
       /**

@@ -11,7 +11,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 
-import { buildContract, findCriterion, reviseContract, workspaceEpochOf, executionStatusOf, type CreateContractInput, type NewCriterionInput } from './domain/aggregate.ts'
+import { buildContract, enforceEnterprisePolicy, findCriterion, reviseContract, workspaceEpochOf, executionStatusOf, type CreateContractInput, type NewCriterionInput } from './domain/aggregate.ts'
 import { err, infrastructureError, ok, type OutcomeResult } from './domain/errors.ts'
 import type { ContractId, CriterionId, EvidenceId, ExportId, VerificationRunId } from './domain/ids.ts'
 import { deriveExportId, contentHash } from './domain/ids.ts'
@@ -232,6 +232,17 @@ export class OutcomeLoopService extends Service {
     })
   }
 
+  private enterpriseConstraints() {
+    const cfg = this.options.config
+    return {
+      active: cfg.mode === 'enterprise',
+      requireCriteria: cfg.enterprise.requireCriteria,
+      minCriteria: cfg.enterprise.minCriteria,
+      mustIncludeKinds: cfg.enterprise.mustIncludeKinds,
+      allowedVerifierIds: cfg.enterprise.allowedVerifierIds,
+    }
+  }
+
   private assertMutable(): OutcomeResult<void> {
     if (this.disposed) {
       return err('plugin-disposed', 'outcome-loop is disposed; mutations are rejected')
@@ -268,6 +279,8 @@ export class OutcomeLoopService extends Service {
     try {
       const built = buildContract(input)
       if (!built.ok) return built
+      const enforced = enforceEnterprisePolicy(built.value, this.enterpriseConstraints())
+      if (!enforced.ok) return enforced
       const existing = this.repository.getContract(built.value.id)
       if (existing !== undefined) {
         return err('invalid-input', 'a contract with the same id already exists — revise it instead')
@@ -290,6 +303,8 @@ export class OutcomeLoopService extends Service {
       if (current === undefined) return err('contract-not-found', 'no such contract')
       const revised = reviseContract(current, patch)
       if (!revised.ok) return revised
+      const enforced = enforceEnterprisePolicy(revised.value, this.enterpriseConstraints())
+      if (!enforced.ok) return enforced
       const applied = await this.repository.updateContract(ref.contractId, revised.value, ref.expectedRevision)
       if (!applied) {
         const latest = this.repository.getContract(ref.contractId)

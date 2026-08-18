@@ -329,18 +329,59 @@ export function apply(ctx: Context, config: CommandsConfig): void {
             if (!write.ok) return { kind: 'error', text: formatError(write.error) }
             return { kind: 'success', text: `Contract exported to ${write.value}` }
           }
+          case 'calibration': {
+            const contracts = await resolveContracts(service, sessionId, args.positionals[1])
+            if (!contracts.ok) return { kind: 'error', text: formatError(contracts.error) }
+            const { calibrationRows, calibrationSummary } = await import('../dsh/calibration.ts')
+            const { usageFromFacts } = await import('../dsh/token-bridge.ts')
+            const out: string[] = []
+            for (const contract of contracts.value) {
+              const rows = calibrationRows(
+                contract,
+                service.repository.listEvidence(contract.id),
+                service.repository.listRuns(contract.id).at(-1),
+                service.repository.getDisposition(contract.id),
+                usageFromFacts(service.registry.getLog(contract.sessionId)),
+              )
+              const summary = calibrationSummary(rows)
+              out.push(`Calibration for ${contract.id}: ${summary.total} decision record(s)`)
+              if (summary.total === 0) {
+                out.push('  no decision evidence recorded (submit via recordDecisionEvidence, e.g. dsh-code-reference)')
+                continue
+              }
+              const avg = summary.predictedMatch.average
+              if (avg !== undefined) {
+                out.push(`  predictedMatch: avg ${avg.toFixed(2)} (min ${summary.predictedMatch.min?.toFixed(2)}, max ${summary.predictedMatch.max?.toFixed(2)})`)
+              }
+              out.push(`  observations: ${Object.entries(summary.observations).map(([k, v]) => `${k}=${v}`).join(', ')}`)
+              if (summary.confirmedReuse > 0) out.push(`  confirmed reuse (predicted ≥ 0.5 and passed): ${summary.confirmedReuse}`)
+              for (const row of rows) {
+                out.push(`  ${row.decisionId} [${row.strategy}] predicted=${row.predictedMatch?.toFixed(2) ?? 'n/a'} → ${row.actual.verificationStatus} (${row.actual.criteriaPassed}/${row.actual.criteriaTotal} criteria, ${row.actual.tokens} tokens, disposition=${row.actual.disposition}) [${row.observation}]`)
+              }
+            }
+            return { kind: 'success', text: out.join('\n') }
+          }
           case 'cost': {
             const contracts = await resolveContracts(service, sessionId, args.positionals[1])
             if (!contracts.ok) return { kind: 'error', text: formatError(contracts.error) }
             const out: string[] = []
+            let totalInput = 0
+            let totalOutput = 0
+            let totalCalls = 0
             for (const contract of contracts.value) {
               const { usageFromFacts, costOf } = await import('../dsh/token-bridge.ts')
               const usage = usageFromFacts(service.registry.getLog(contract.sessionId))
+              totalInput += usage.inputTokens ?? 0
+              totalOutput += usage.outputTokens ?? 0
+              totalCalls += usage.calls
               const line = `${contract.id}: ${usage.calls} call(s), ${usage.inputTokens ?? 0} in / ${usage.outputTokens ?? 0} out tokens (${usage.usageKind})`
               const cost = costOf(usage, config.cost.priceTable, Date.now())
               out.push(cost === undefined
                 ? `${line} — no configured price table entry (tokens only, see PRIVACY.md)`
                 : `${line} — ~${formatMoney(cost.totalCost, cost.currency)} (${cost.entry.source}, effective ${new Date(cost.entry.effectiveFrom).toISOString()})`)
+            }
+            if (args.options.has('summary') && contracts.value.length > 1) {
+              out.push(`summary: ${contracts.value.length} contract(s), ${totalCalls} call(s), ${totalInput} in / ${totalOutput} out tokens (out/in ratio ${totalInput === 0 ? 'n/a' : (totalOutput / totalInput).toFixed(2)})`)
             }
             return { kind: 'success', text: out.join('\n') }
           }
