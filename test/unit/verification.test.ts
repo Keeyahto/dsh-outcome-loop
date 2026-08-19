@@ -3,6 +3,8 @@
  * active runner primitives (security-relevant — target high branch coverage).
  */
 
+import { isAbsolute, resolve } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import type { AcceptanceCriterion, Evidence, TaskContract } from '../../src/domain/types.ts'
@@ -220,9 +222,18 @@ describe('active runner primitives', () => {
   })
 
   it('resolveScopedPath rejects escapes', () => {
-    expect(resolveScopedPath('/ws', 'src/a.ts')).toBe('/ws/src/a.ts')
-    expect(resolveScopedPath('/ws', '../escape.ts')).toBeUndefined()
-    expect(resolveScopedPath('/ws', '/etc/passwd')).toBeUndefined()
+    // Use a real absolute scope root on the current platform so that
+    // node:path's resolve() yields a platform-native absolute path that
+    // we can compare against without locking the test to a specific OS.
+    // The previous implementation hardcoded POSIX '/ws' which only worked
+    // when the test ran on POSIX CI.
+    const scopeRoot = isAbsolute(process.cwd()) ? process.cwd() : '/tmp'
+    const expected = resolve(scopeRoot, 'src/a.ts')
+    expect(resolveScopedPath(scopeRoot, 'src/a.ts')).toBe(expected)
+    expect(resolveScopedPath(scopeRoot, '../escape.ts')).toBeUndefined()
+    // /etc/passwd on POSIX escapes the cwd scope; on Windows C:/etc/passwd
+    // is an absolute path outside the cwd scope and is also rejected.
+    expect(resolveScopedPath(scopeRoot, resolve(scopeRoot, '../etc/passwd'))).toBeUndefined()
   })
 
   it('parsePorcelain extracts paths', () => {

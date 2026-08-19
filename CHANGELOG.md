@@ -4,9 +4,21 @@
 
 ## [Unreleased]
 
+## [0.1.0-beta.7-keeyahto.1] - 2026-08-19
+
+> Fork pre-release for install-smoke validation. Same SemVer pre-release
+> tag (`-keeyahto.1`) so npm/pnpm sorts it **after** `0.1.0-beta.7` and
+> before any later beta. Replaces `-keeyahto.0` if you installed a prior
+> dry-run tag.
+
 ### Fixed
 
 - **Platform-aware workspaceRoot validation**（DEP-01, Forge vNext plan §DEP-01）:`validateScope` in `src/domain/aggregate.ts` previously used POSIX-only `startsWith('/')` and rejected every Windows absolute path (`C:\repo`, `C:/repo`, `D:\...`). Switched to Node's platform-aware `path.isAbsolute`, matching the existing shape in `src/verification/policy.ts:64`. Windows users on rc.7+ no longer hit `'workspaceRoot must be an absolute path or empty'` for valid paths. Acceptance cases from the plan now pass on both POSIX and Windows. Empty-string sentinel (`''` = "no workspace root") preserved.
+
+- **Windows-only test portability**: three pre-existing tests failed on Windows due to platform assumptions:
+  - `test/privacy/privacy.test.ts:54` and `:82` — `new URL('../../src/', import.meta.url).pathname` produced `/D:/...`, then `readFileSync` produced `D:\D:\...` (double-drive). Switched to `fileURLToPath`, which gives a real native path on every platform.
+  - `test/unit/verification.test.ts:223` — `resolveScopedPath` test hardcoded POSIX `/ws` and expected `/ws/src/a.ts` output, which Node's platform-native `path.resolve` does not produce on Windows. Switched to platform-aware fixtures derived from `process.cwd()` plus an explicit relative-escape case.
+  - No production semantics changed — all three fixes are confined to test setup.
 
 ## [0.1.0-beta.7] - 2026-08-18
 

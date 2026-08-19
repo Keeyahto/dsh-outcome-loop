@@ -10,13 +10,19 @@
 
 import { readFileSync } from 'node:fs'
 import { globSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
 import { Config } from '../../src/config.ts'
 import { validateConfig } from '../../src/index.ts'
 
-const SRC = new URL('../../src/', import.meta.url).pathname
+// Resolve the src/ directory relative to this test file using
+// fileURLToPath — on Windows `new URL(...).pathname` returns
+// `/D:/...` which would then be concatenated with the current working
+// directory, producing `D:\D:\...`. fileURLToPath gives a real
+// platform-native path that readFileSync / globSync accept as-is.
+const SRC = fileURLToPath(new URL('../../src/', import.meta.url))
 
 function builtFiles(): string[] {
   const out: string[] = []
