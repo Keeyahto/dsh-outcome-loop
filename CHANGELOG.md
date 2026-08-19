@@ -2,6 +2,12 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **Platform-aware workspaceRoot validation**（DEP-01, Forge vNext plan §DEP-01）:`validateScope` in `src/domain/aggregate.ts` previously used POSIX-only `startsWith('/')` and rejected every Windows absolute path (`C:\repo`, `C:/repo`, `D:\...`). Switched to Node's platform-aware `path.isAbsolute`, matching the existing shape in `src/verification/policy.ts:64`. Windows users on rc.7+ no longer hit `'workspaceRoot must be an absolute path or empty'` for valid paths. Acceptance cases from the plan now pass on both POSIX and Windows. Empty-string sentinel (`''` = "no workspace root") preserved.
+
 ## [0.1.0-beta.7] - 2026-08-18
 
 ### Fixed
