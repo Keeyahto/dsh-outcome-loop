@@ -3,6 +3,8 @@
  * criterion lookup, and fact-log reduction. Pure domain.
  */
 
+import { isAbsolute } from 'node:path'
+
 import { err, ok, type OutcomeResult } from './errors.ts'
 import { contentHash, deriveContractId, deriveCriterionId, type ContractId, type CriterionId } from './ids.ts'
 import type {
@@ -37,9 +39,21 @@ export interface NewCriterionInput {
   freshness?: AcceptanceCriterion['freshness']
 }
 
-/** Validate a scope; rejects empty roots and non-absolute roots. */
+/**
+ * Validate a scope; rejects empty roots and non-absolute roots.
+ *
+ * Absolute-ness is determined by Node's platform-aware `path.isAbsolute`,
+ * not by POSIX-only `startsWith('/')` (DEP-01). This means:
+ *   - on POSIX: `/root/repo` is accepted; `/foo`, `/Users/x` are accepted;
+ *     `relative/path`, `./x`, `~/x` are rejected;
+ *   - on Windows: `C:\repo`, `C:/repo`, `D:\path\to\repo` are accepted;
+ *     `relative\path`, `repo`, `C:relative` are rejected.
+ *
+ * The empty string is the sentinel for "no workspace root" (consistent with
+ * `verification/policy.ts:64`) and is accepted as before.
+ */
 export function validateScope(scope: TaskScope): OutcomeResult<TaskScope> {
-  if (scope.workspaceRoot !== '' && !scope.workspaceRoot.startsWith('/')) {
+  if (scope.workspaceRoot !== '' && !isAbsolute(scope.workspaceRoot)) {
     return err('invalid-input', 'workspaceRoot must be an absolute path or empty')
   }
   if (!scope.allowActiveVerification) {

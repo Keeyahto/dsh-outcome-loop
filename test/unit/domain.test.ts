@@ -5,12 +5,12 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { buildContract, reviseContract, criterionById, executionStatusOf, appendFact, workspaceEpochOf } from '../../src/domain/aggregate.ts'
+import { buildContract, reviseContract, criterionById, executionStatusOf, appendFact, validateScope, workspaceEpochOf } from '../../src/domain/aggregate.ts'
 import { aggregateVerification, resultReason } from '../../src/domain/reducer.ts'
 import { evidenceFreshness } from '../../src/domain/freshness.ts'
 import { contentHash, deriveContractId, deriveEvidenceId } from '../../src/domain/ids.ts'
 import { err, ok, isOutcomeError } from '../../src/domain/errors.ts'
-import type { AcceptanceCriterion, Evidence, TaskContract } from '../../src/domain/types.ts'
+import type { AcceptanceCriterion, Evidence, TaskContract, TaskScope } from '../../src/domain/types.ts'
 
 function contractWith(specification: AcceptanceCriterion['specification'], over: Partial<AcceptanceCriterion> = {}): { contract: TaskContract; criterion: AcceptanceCriterion } {
   const built = buildContract({
@@ -72,6 +72,79 @@ describe('buildContract', () => {
     expect(built.ok).toBe(true)
     const contract = (built as { ok: true; value: TaskContract }).value
     expect(contract.criteria[0]?.id).not.toBe(contract.criteria[1]?.id)
+  })
+})
+
+describe('validateScope — platform-aware workspaceRoot (DEP-01)', () => {
+  // Acceptance cases from the Forge vNext plan §DEP-01, exercised via
+  // Node's platform-aware `path.isAbsolute`. Test inputs are derived from
+  // `process.platform` so the same suite passes on POSIX and on Windows.
+  const isWin = process.platform === 'win32'
+
+  // Paths that are absolute on the current platform only.
+  const absoluteOnCurrent = isWin
+    ? ['C:\\repo', 'C:/repo', 'D:\\path\\to\\repo', String.raw`C:\Users\Admin`]
+    : ['/root/repo', '/tmp/ws', '/Users/x']
+
+  // Paths that are relative on every platform (must reject).
+  const relativeAlways = ['relative/path', './x', 'foo/bar', '']
+
+  // Forward-slash paths: on POSIX they are absolute, on Windows Node's
+  // `path.isAbsolute('/foo')` also returns true (Win API treats leading
+  // slash as absolute). Documenting this with an explicit test prevents
+  // future regressions if someone re-tightens the validator.
+  const leadingSlashAbsoluteEverywhere = ['/leading/slash/path']
+
+  function scope(workspaceRoot: string): TaskScope {
+    return { workspaceRoot, pathPrefixes: [], allowActiveVerification: false }
+  }
+
+  it.each(absoluteOnCurrent)('accepts absolute path on current platform: %s', (path) => {
+    const result = validateScope(scope(path));
+    expect(result.ok).toBe(true);
+  })
+
+  it.each(relativeAlways)('rejects relative path: %s', (path) => {
+    // The empty string is handled separately below as the documented
+    // sentinel; here we only test paths that look like relative paths.
+    if (path === '') return;
+    const result = validateScope(scope(path));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('invalid-input');
+    }
+  })
+
+  it.each(leadingSlashAbsoluteEverywhere)('treats leading-slash path as absolute everywhere: %s', (path) => {
+    // Node's `path.isAbsolute('/foo')` returns true on both POSIX and Windows,
+    // so this is a deliberate "always accepted" case. It exists so a future
+    // tightening of `validateScope` cannot regress this without being noticed.
+    const result = validateScope(scope(path));
+    expect(result.ok).toBe(true);
+  })
+
+  it('accepts the empty-string sentinel (no workspace root)', () => {
+    // Consistent with `verification/policy.ts:64` — empty string is the
+    // "no workspace root" sentinel and is accepted as before.
+    const result = validateScope(scope(''));
+    expect(result.ok).toBe(true);
+  })
+
+  it('rejects an empty-looking whitespace string', () => {
+    // Whitespace is not the documented sentinel; must reject.
+    const result = validateScope(scope('   '));
+    expect(result.ok).toBe(false);
+  })
+
+  it('end-to-end: buildContract with a Windows-style absolute path on Windows, POSIX-style on POSIX', () => {
+    // Smoke test through the public `buildContract` factory path so a
+    // regression in `validateScope` is caught at the entry point as well.
+    const wsRoot = isWin ? String.raw`C:\Users\Admin\proj` : '/home/user/proj'
+    const built = buildContract({ sessionId: 's', goalText: 'g', workspaceRoot: wsRoot })
+    expect(built.ok).toBe(true)
+    if (built.ok) {
+      expect(built.value.scope.workspaceRoot).toBe(wsRoot)
+    }
   })
 })
 
