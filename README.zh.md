@@ -26,6 +26,30 @@ pnpm pack   # 生成 dsh-outcome-loop-<version>.tgz
 dsh plugin --profile <name> add ./dsh-outcome-loop-0.1.0-beta.8.tgz
 ```
 
+> **前置条件 —— `storageDomain`（真实宿主验证）**：插件必需 `storageDomain`
+> 服务，但官方 **`dsh-base` bundle 不含 storage 行**（只有 `@deepseek-ai/dsh-web-app`
+> 等上层 bundle 提供；`web` profile 自带）。在裸/headless profile 上需补一次：
+>
+> ```bash
+> dsh plugin --profile <name> add @deepseek-ai/dsh-storage-domain@0.1.0-rc.8
+> # 然后在 ~/.dsh/profiles/<name>/cordis.patch.yml 追加：
+> # - insert:
+> #     - id: storage
+> #       name: "@deepseek-ai/dsh-storage"
+> #     - id: storage-json
+> #       name: "@deepseek-ai/dsh-storage-json"
+> #       config:
+> #         root: !!js dshHomePath("storages")
+> #     - id: storage-domain
+> #       name: "@deepseek-ai/dsh-storage-domain"
+> #       config:
+> #         backend: json
+> ```
+>
+> 缺失时 profile 启动会 fail loud（`waiting for service: storageDomain`，这是
+> 有意的设计）；完整已验证生命周期见 [COMPATIBILITY.md](COMPATIBILITY.md) §4：
+> add → dump-config → 启动 → 真实 `/outcome` 命令 → 重启读取 → 卸载。
+
 Bundle 会挂载四个插件行（见 `cordis.patch.yml`）：
 
 | 行 | 作用 |

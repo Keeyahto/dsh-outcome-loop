@@ -26,6 +26,32 @@ pnpm pack   # produces dsh-outcome-loop-<version>.tgz
 dsh plugin --profile <name> add ./dsh-outcome-loop-0.1.0-beta.8.tgz
 ```
 
+> **Prerequisite — `storageDomain` (real-host verified)**: the plugin requires
+> the `storageDomain` service, which the official `dsh-base` bundle does **not**
+> provide (only upper bundles such as `@deepseek-ai/dsh-web-app` do; the `web`
+> profile already has it). On a bare/headless profile, add it once:
+>
+> ```bash
+> dsh plugin --profile <name> add @deepseek-ai/dsh-storage-domain@0.1.0-rc.8
+> # then append to ~/.dsh/profiles/<name>/cordis.patch.yml:
+> # - insert:
+> #     - id: storage
+> #       name: "@deepseek-ai/dsh-storage"
+> #     - id: storage-json
+> #       name: "@deepseek-ai/dsh-storage-json"
+> #       config:
+> #         root: !!js dshHomePath("storages")
+> #     - id: storage-domain
+> #       name: "@deepseek-ai/dsh-storage-domain"
+> #       config:
+> #         backend: json
+> ```
+>
+> Without it the profile boot fails loud with `waiting for service:
+> storageDomain` (fail-loud by design; see [COMPATIBILITY.md](COMPATIBILITY.md) §4
+> for the verified lifecycle: add → dump-config → boot → real `/outcome`
+> commands → restart-read → uninstall).
+
 The bundle mounts four plugin rows (see `cordis.patch.yml`):
 
 | Row | Role |

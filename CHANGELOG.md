@@ -18,6 +18,7 @@
 
 - **双语 README**：`README.md`（英文，含运行时图）与 `README.zh.md`（中文镜像）；`files` 清单纳入 `README.zh.md`。
 - 覆盖度量不再排除 `src/consumers/**`（AGENTS.md 禁止排除安全关键文件），并设置项目级阈值（statements 80 / branches 68 / functions 80 / lines 80）；CI 新增 `pnpm test:coverage` 强制执行。
+- **真实宿主生命周期 E2E（DSH rc.8 实测通过）**：`dsh plugin add` → `--dump-config`（三行注入）→ 真实 `boot()` 全树加载（0 错误，三行 ACTIVE，`outcome_loop` domain 打开）→ 真实 agent + 真实 `/outcome new / criterion add-command / verify / status` 命令 → 新进程 resume 同一 session 重启读取上一进程契约 → 卸载。E2E 同时发现并文档化了 `storageDomain` 前置条件：官方 `dsh-base` bundle 不含 storage 行，裸 profile 安装需补 `@deepseek-ai/dsh-storage-domain` + patch 行（配方见 README/COMPATIBILITY §4）。
 
 ### Changed
 
