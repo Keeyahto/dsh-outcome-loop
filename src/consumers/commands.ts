@@ -439,9 +439,11 @@ export function apply(ctx: Context, config: CommandsConfig): void {
 
 /**
  * Resolve a user-supplied path against the session workspace (spec §14.3):
- * workspace-relative only, no `..`/absolute escapes.
+ * workspace-relative only, no `..`/absolute escapes, and — for anything that
+ * will be read — no symlink escape: the realpath of an existing target must
+ * stay inside the realpath of the workspace root.
  */
-async function resolveScopedTarget(
+async function resolveScopedReadTarget(
   invocation: { agent: { session: { header: { cwd?: string } } } },
   path: string,
 ): Promise<OutcomeResult<string>> {
@@ -449,16 +451,33 @@ async function resolveScopedTarget(
   if (cwd === undefined) {
     return { ok: false, error: { code: 'invalid-input', message: 'this session has no workspace root (cwd)' } }
   }
-  const { isAbsolute, resolve, relative } = await import('node:path')
-  if (isAbsolute(path)) {
-    return { ok: false, error: { code: 'invalid-input', message: 'path must be workspace-relative' } }
-  }
-  const target = resolve(cwd, path)
-  const rel = relative(cwd, target)
-  if (rel.startsWith('..') || isAbsolute(rel)) {
+  const { resolveScopedPath } = await import('../verification/paths.ts')
+  const scoped = await resolveScopedPath(cwd, path)
+  if (scoped.status === 'escape' || scoped.path === undefined) {
     return { ok: false, error: { code: 'invalid-input', message: `path '${path}' escapes the workspace` } }
   }
-  return { ok: true, value: target }
+  return { ok: true, value: scoped.path }
+}
+
+/**
+ * Resolve a write target that may not exist yet: the nearest existing
+ * ancestor's realpath must stay inside the workspace, so no write can land
+ * outside through a symlinked parent or a symlink at the target itself.
+ */
+async function resolveScopedWriteTarget(
+  invocation: { agent: { session: { header: { cwd?: string } } } },
+  path: string,
+): Promise<OutcomeResult<string>> {
+  const cwd = invocation.agent.session.header.cwd
+  if (cwd === undefined) {
+    return { ok: false, error: { code: 'invalid-input', message: 'this session has no workspace root (cwd)' } }
+  }
+  const { confineWriteTarget } = await import('../verification/paths.ts')
+  const scoped = await confineWriteTarget(cwd, path)
+  if (scoped.status === 'escape' || scoped.path === undefined) {
+    return { ok: false, error: { code: 'invalid-input', message: `path '${path}' escapes the workspace` } }
+  }
+  return { ok: true, value: scoped.path }
 }
 
 /**
@@ -471,7 +490,7 @@ async function writeScopedFile(
   content: string,
   overwrite: boolean,
 ): Promise<OutcomeResult<string>> {
-  const targetResult = await resolveScopedTarget(invocation, outPath)
+  const targetResult = await resolveScopedWriteTarget(invocation, outPath)
   if (!targetResult.ok) return targetResult
   const target = targetResult.value
   const { access, rename, writeFile, mkdir, rm } = await import('node:fs/promises')
@@ -501,7 +520,7 @@ async function readScopedFile(
   invocation: { agent: { session: { header: { cwd?: string } } } },
   path: string,
 ): Promise<OutcomeResult<string>> {
-  const targetResult = await resolveScopedTarget(invocation, path)
+  const targetResult = await resolveScopedReadTarget(invocation, path)
   if (!targetResult.ok) return targetResult
   const { readFile } = await import('node:fs/promises')
   try {

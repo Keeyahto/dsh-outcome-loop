@@ -9,10 +9,10 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { stat, readFile } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
 
 import type { CriterionSpecification, EvidenceFact, SensitivityClass } from '../../domain/types.ts'
 import { contentHash } from '../../domain/ids.ts'
+import { resolveScopedPath } from '../paths.ts'
 
 export interface ActiveOptions {
   /** Resolved cwd; must be inside scopeRoot (checked by the caller). */
@@ -118,15 +118,6 @@ export async function digestFile(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
-/** Resolve and confine a workspace-relative path inside the scope root. */
-export function resolveScopedPath(scopeRoot: string, path: string): string | undefined {
-  if (!isAbsolute(scopeRoot)) return undefined
-  const resolved = resolve(scopeRoot, path)
-  const rel = relative(scopeRoot, resolved)
-  if (rel.startsWith('..') || isAbsolute(rel)) return undefined
-  return resolved
-}
-
 /** Parse `git status --porcelain` lines into changed paths (relative). */
 export function parsePorcelain(output: string): string[] {
   const paths: string[] = []
@@ -196,6 +187,48 @@ export interface ActiveVerdict {
 }
 
 /**
+ * Infrastructure failure gate (spec §12.3): timed out / failed to start /
+ * output truncated. Such outcomes mean the command never ran to completion,
+ * so its output must never be parsed into pass/fail evidence — the verdict
+ * is always 'unknown'. Non-zero exits are handled per-verifier: they are an
+ * infrastructure failure for git-scope, but legitimate for diagnostics tools
+ * (tsc/eslint exit 1 when findings exist).
+ */
+function infraVerdict(
+  outcome: CommandOutcome,
+  label: string,
+  sensitivity: SensitivityClass,
+  options: ActiveOptions,
+  providerId: string,
+): ActiveVerdict | undefined {
+  if (outcome.timedOut) {
+    return {
+      status: 'unknown',
+      fact: { kind: 'verifier', providerId, verdict: 'unknown', detail: 'verification timed out' },
+      sensitivity,
+      note: `${label} timed out after ${options.timeoutMs}ms`,
+    }
+  }
+  if (outcome.exitCode === null) {
+    return {
+      status: 'unknown',
+      fact: { kind: 'verifier', providerId, verdict: 'unknown', detail: 'command failed to start' },
+      sensitivity,
+      note: `${label} failed to start${outcome.errorCode === undefined ? '' : ` (${outcome.errorCode})`}`,
+    }
+  }
+  if (outcome.truncated) {
+    return {
+      status: 'unknown',
+      fact: { kind: 'verifier', providerId, verdict: 'unknown', detail: 'output truncated' },
+      sensitivity,
+      note: `${label} output was truncated at ${options.maxOutputBytes} bytes — results unreliable`,
+    }
+  }
+  return undefined
+}
+
+/**
  * Run one active verification. The caller (policy/engine) has already decided
  * this is allowed. Each check is read-only; none touches the network.
  */
@@ -240,8 +273,8 @@ export async function verifyActive(
     }
     case 'file-exists':
     case 'file-absent': {
-      const target = resolveScopedPath(options.scopeRoot, specification.path)
-      if (target === undefined) {
+      const scoped = await resolveScopedPath(options.scopeRoot, specification.path)
+      if (scoped.status === 'escape') {
         return {
           status: 'unknown',
           fact: { kind: 'file-state', path: specification.path, exists: false },
@@ -252,13 +285,15 @@ export async function verifyActive(
       let exists = false
       let sizeBytes: number | undefined
       let mtimeMs: number | undefined
-      try {
-        const info = await stat(target)
-        exists = info.isFile() || info.isDirectory()
-        sizeBytes = info.size
-        mtimeMs = info.mtimeMs
-      } catch {
-        exists = false
+      if (scoped.status === 'ok' && scoped.realPath !== undefined) {
+        try {
+          const info = await stat(scoped.realPath)
+          exists = info.isFile() || info.isDirectory()
+          sizeBytes = info.size
+          mtimeMs = info.mtimeMs
+        } catch {
+          exists = false
+        }
       }
       const want = specification.kind === 'file-exists'
       return {
@@ -269,8 +304,8 @@ export async function verifyActive(
       }
     }
     case 'file-digest': {
-      const target = resolveScopedPath(options.scopeRoot, specification.path)
-      if (target === undefined) {
+      const scoped = await resolveScopedPath(options.scopeRoot, specification.path)
+      if (scoped.status === 'escape') {
         return {
           status: 'unknown',
           fact: { kind: 'file-state', path: specification.path, exists: false },
@@ -280,11 +315,23 @@ export async function verifyActive(
       }
       let digest: string | undefined
       let exists = false
-      try {
-        digest = await digestFile(target)
-        exists = true
-      } catch {
-        digest = undefined
+      if (scoped.status === 'ok' && scoped.realPath !== undefined) {
+        try {
+          digest = await digestFile(scoped.realPath)
+          exists = true
+        } catch (error) {
+          // Read failure on a confined, existing file is infrastructure trouble.
+          if (error instanceof Error && 'code' in error && (error as { code?: string }).code === 'ENOENT') {
+            digest = undefined
+          } else {
+            return {
+              status: 'unknown',
+              fact: { kind: 'verifier', providerId: 'file-digest', verdict: 'unknown', detail: 'file read failed' },
+              sensitivity: 'confidential',
+              note: error instanceof Error ? error.message : String(error),
+            }
+          }
+        }
       }
       if (digest === undefined) {
         return { status: 'fail', fact: { kind: 'file-state', path: specification.path, exists: false }, sensitivity: 'confidential', note: 'file missing' }
@@ -297,8 +344,8 @@ export async function verifyActive(
       }
     }
     case 'json-schema': {
-      const target = resolveScopedPath(options.scopeRoot, specification.path)
-      if (target === undefined) {
+      const scoped = await resolveScopedPath(options.scopeRoot, specification.path)
+      if (scoped.status === 'escape') {
         return {
           status: 'unknown',
           fact: { kind: 'verifier', providerId: 'json-schema', verdict: 'unknown', detail: 'path escapes scope' },
@@ -307,7 +354,15 @@ export async function verifyActive(
         }
       }
       try {
-        const content = JSON.parse(await readFile(target, 'utf8')) as unknown
+        if (scoped.status !== 'ok' || scoped.realPath === undefined) {
+          return {
+            status: 'unknown',
+            fact: { kind: 'verifier', providerId: 'json-schema', verdict: 'unknown', detail: 'schema target missing' },
+            sensitivity: 'confidential',
+            note: `file '${specification.path}' is missing`,
+          }
+        }
+        const content = JSON.parse(await readFile(scoped.realPath, 'utf8')) as unknown
         const ajv = new (await ajvCtor())({ strict: false, allErrors: false })
         const valid = ajv.validate(specification.schema, content)
         return {
@@ -327,6 +382,20 @@ export async function verifyActive(
     case 'git-scope': {
       const head = await run('git rev-parse HEAD')
       const status = await run('git status --porcelain')
+      for (const [outcome, label] of [[head, 'git rev-parse HEAD'], [status, 'git status --porcelain']] as const) {
+        const failure = infraVerdict(outcome, label, 'internal', options, 'git-scope')
+        if (failure !== undefined) return failure
+        if (outcome.exitCode !== 0) {
+          return {
+            status: 'unknown',
+            fact: { kind: 'verifier', providerId: 'git-scope', verdict: 'unknown', detail: `${label} exited ${outcome.exitCode}` },
+            sensitivity: 'internal',
+            note: `${label} failed (exit ${outcome.exitCode}) — changed paths cannot be trusted`,
+          }
+        }
+      }
+      // Only now is the output trustworthy: git succeeded, so stderr is not
+      // error text and every porcelain line is a real changed path.
       const changed = parsePorcelain(status.output)
       const forbidden = specification.forbiddenPrefixes.filter((prefix) => changed.some((p) => p.startsWith(prefix)))
       const allowed = specification.allowedPrefixes
@@ -346,7 +415,24 @@ export async function verifyActive(
     }
     case 'diagnostic-count': {
       const outcome = await run(specification.command)
+      const label = `diagnostic command '${specification.command}'`
+      // timedOut / failed to start / truncated: the command never ran to
+      // completion, so its output must never be parsed.
+      const gate = infraVerdict(outcome, label, 'internal', options, 'diagnostic-count')
+      if (gate !== undefined && (outcome.timedOut || outcome.exitCode === null || outcome.truncated)) {
+        return gate
+      }
       const counts = countDiagnostics(outcome.output)
+      // tsc/eslint legitimately exit non-zero when findings exist — but a
+      // non-zero exit with zero parsed diagnostics is infrastructure trouble.
+      if (outcome.exitCode !== 0 && counts.errors === 0 && counts.warnings === 0) {
+        return {
+          status: 'unknown',
+          fact: { kind: 'verifier', providerId: 'diagnostic-count', verdict: 'unknown', detail: `command exited ${outcome.exitCode} without diagnostics` },
+          sensitivity: 'internal',
+          note: `${label} exited ${outcome.exitCode} but produced no parseable diagnostics`,
+        }
+      }
       return {
         status: counts.errors <= specification.maxErrors && counts.warnings <= specification.maxWarnings ? 'pass' : 'fail',
         fact: { kind: 'diagnostic-count', toolLabel: specification.command, errors: counts.errors, warnings: counts.warnings },
@@ -368,8 +454,8 @@ export async function verifyActive(
             note: 'junit test-report criteria need a reportPath (workspace-relative)',
           }
         }
-        const target = resolveScopedPath(options.scopeRoot, specification.reportPath)
-        if (target === undefined) {
+        const scoped = await resolveScopedPath(options.scopeRoot, specification.reportPath)
+        if (scoped.status === 'escape') {
           return {
             status: 'unknown',
             fact: { kind: 'verifier', providerId: 'junit-report', verdict: 'unknown', detail: 'reportPath escapes scope' },
@@ -378,7 +464,15 @@ export async function verifyActive(
           }
         }
         try {
-          const xml = await readFile(target, 'utf8')
+          if (scoped.status !== 'ok' || scoped.realPath === undefined) {
+            return {
+              status: 'unknown',
+              fact: { kind: 'verifier', providerId: 'junit-report', verdict: 'unknown', detail: 'reportPath missing' },
+              sensitivity: 'internal',
+              note: `report file '${specification.reportPath}' is missing`,
+            }
+          }
+          const xml = await readFile(scoped.realPath, 'utf8')
           const { parseJunit, junitSatisfies } = await import('./junit.ts')
           const counts = parseJunit(xml)
           if (counts === undefined) {
@@ -414,8 +508,13 @@ export async function verifyActive(
       }
       if (specification.framework === 'tap' && specification.command !== undefined) {
         const outcome = await run(specification.command)
+        const failure = infraVerdict(outcome, `'${specification.command}'`, 'internal', options, 'tap-report')
+        if (failure !== undefined) return failure
         const { looksLikeTap, parseTap, tapSatisfies } = await import('./tap.ts')
-        const counts = outcome.exitCode !== null && looksLikeTap(outcome.output) ? parseTap(outcome.output) : undefined
+        // Non-zero exits are legitimate: failing suites exit non-zero AND
+        // carry their counts in TAP — parse them; a non-zero exit without
+        // TAP falls through to 'no parseable TAP output' → unknown.
+        const counts = looksLikeTap(outcome.output) ? parseTap(outcome.output) : undefined
         if (counts === undefined) {
           return {
             status: 'unknown',
