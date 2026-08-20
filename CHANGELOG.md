@@ -2,6 +2,27 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.8] - 2026-08-20
+
+### Security（第三轮评审：P1 修复）
+
+- **主动验证器不再产生错误的 `pass`**：新增统一基础设施失败门控——命令超时 / 启动失败（`exitCode === null`）/ 输出截断一律判定 `unknown`，绝不进入解析。此前：不存在的 `diagnostic-count` 命令产生 `0 errors / 0 warnings → pass`；非 git 目录中 `git-scope` 把 git 错误输出解析为变更路径并可 `pass`。
+  - `git-scope`：`git rev-parse HEAD` 与 `git status --porcelain` 都必须成功退出（exit 0）才解析；任一失败 → `unknown`（`verifier` 未知事实，绝不用空 violations 的 git-scope 事实暗示 pass）；
+  - `diagnostic-count`：非零退出且解析不到任何诊断 → `unknown`（工具崩溃）；tsc/eslint 语义保留（非零退出 + 有诊断 → `fail`）；
+  - TAP test-report：超时/截断 → `unknown`；非零退出 + 合法 TAP 仍按计数判定。
+- **符号链接路径逃逸修复**：新增 `src/verification/paths.ts`——现有目标（读/删/存在性）校验 `realpath(target)` 必须落在 `realpath(workspaceRoot)` 内；新建目标（写）向上回溯最近存在祖先并校验其 realpath。此前 `workspace/link.txt -> /tmp/outside/secret.txt` 可被 `file-digest` 读取并 `pass`。
+  - 覆盖：`file-exists` / `file-absent` / `file-digest` / `json-schema` / JUnit `reportPath` / 契约导入（`/outcome import`）/ 导出写入（`export --out`）/ contribute approve（写目录）/ revoke（删目录）；
+  - 逃逸 → `unknown`（verifier）/ `invalid-input`（命令），绝不 pass；工作区内部符号链接不受影响。
+
+### Added
+
+- **双语 README**：`README.md`（英文，含运行时图）与 `README.zh.md`（中文镜像）；`files` 清单纳入 `README.zh.md`。
+- 覆盖度量不再排除 `src/consumers/**`（AGENTS.md 禁止排除安全关键文件），并设置项目级阈值（statements 80 / branches 68 / functions 80 / lines 80）；CI 新增 `pnpm test:coverage` 强制执行。
+
+### Changed
+
+- 测试 148 → **151**（verifier 门控、git 真实仓库正/反例、符号链接逃逸回归、realpath 边界单元测试）。
+
 ## [0.1.0-beta.7] - 2026-08-18
 
 ### Fixed
