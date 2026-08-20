@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest'
 import type { AcceptanceCriterion, Evidence, TaskContract } from '../../src/domain/types.ts'
 import { buildContract } from '../../src/domain/aggregate.ts'
 import { verifyPassive } from '../../src/verification/adapters/passive.ts'
-import { countDiagnostics, digestFile, parsePorcelain, resolveScopedPath, runCommand, splitArgs } from '../../src/verification/adapters/active.ts'
+import { countDiagnostics, digestFile, parsePorcelain, runCommand, splitArgs } from '../../src/verification/adapters/active.ts'
+import { confineWriteTarget, resolveScopedPath } from '../../src/verification/paths.ts'
 import { decideActiveRun } from '../../src/verification/policy.ts'
 import { impliesVerdict } from '../../src/verification/engine.ts'
 
@@ -219,10 +220,79 @@ describe('active runner primitives', () => {
     expect(capped.output.length).toBeLessThanOrEqual(100)
   })
 
-  it('resolveScopedPath rejects escapes', () => {
-    expect(resolveScopedPath('/ws', 'src/a.ts')).toBe('/ws/src/a.ts')
-    expect(resolveScopedPath('/ws', '../escape.ts')).toBeUndefined()
-    expect(resolveScopedPath('/ws', '/etc/passwd')).toBeUndefined()
+  it('resolveScopedPath confines existing targets by realpath', async () => {
+    const { mkdtemp, writeFile, symlink, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'ol-paths-'))
+    try {
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(dir, 'src'))
+      await writeFile(join(dir, 'src', 'a.ts'), 'x')
+      const ok = await resolveScopedPath(dir, 'src/a.ts')
+      expect(ok.status).toBe('ok')
+      expect(ok.path).toBe(join(dir, 'src', 'a.ts'))
+      const absent = await resolveScopedPath(dir, 'missing.txt')
+      expect(absent.status).toBe('absent')
+      expect(absent.path).toBe(join(dir, 'missing.txt'))
+      expect((await resolveScopedPath(dir, '../escape.ts')).status).toBe('escape')
+      expect((await resolveScopedPath(dir, '/etc/passwd')).status).toBe('escape')
+      // Symlink whose real target lives outside the workspace → escape.
+      const outside = await mkdtemp(join(tmpdir(), 'ol-paths-out-'))
+      try {
+        await writeFile(join(outside, 'secret.txt'), 's')
+        await symlink(join(outside, 'secret.txt'), join(dir, 'link.txt'))
+        const linked = await resolveScopedPath(dir, 'link.txt')
+        expect(linked.status).toBe('escape')
+        // In-workspace symlink stays allowed.
+        await symlink(join(dir, 'src', 'a.ts'), join(dir, 'inner-link.ts'))
+        expect((await resolveScopedPath(dir, 'inner-link.ts')).status).toBe('ok')
+      } finally {
+        await rm(outside, { recursive: true, force: true })
+      }
+      // Symlink loop (ELOOP) is unresolvable → escape, never a read target.
+      await symlink('loop-b.ts', join(dir, 'loop-a.ts'))
+      await symlink('loop-a.ts', join(dir, 'loop-b.ts'))
+      expect((await resolveScopedPath(dir, 'loop-a.ts')).status).toBe('escape')
+      // Unresolvable scope root → escape.
+      expect((await resolveScopedPath(join(dir, 'missing-root'), 'a.ts')).status).toBe('escape')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('confineWriteTarget rejects symlinked parents and symlink targets', async () => {
+    const { mkdtemp, writeFile, symlink, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'ol-write-'))
+    try {
+      // New file under a plain (existing) parent → ok.
+      expect((await confineWriteTarget(dir, 'new/file.txt')).status).toBe('ok')
+      // New file under a parent symlinked outside → escape.
+      const outside = await mkdtemp(join(tmpdir(), 'ol-write-out-'))
+      try {
+        await symlink(outside, join(dir, 'linkdir'))
+        expect((await confineWriteTarget(dir, 'linkdir/new.txt')).status).toBe('escape')
+        // Existing target that is itself a symlink outside → escape.
+        await writeFile(join(outside, 'target.txt'), 'x')
+        await symlink(join(outside, 'target.txt'), join(dir, 'out-link.txt'))
+        expect((await confineWriteTarget(dir, 'out-link.txt')).status).toBe('escape')
+        // Symlink loop in the ancestor chain → escape.
+        await symlink('loop-b.txt', join(dir, 'loop-a.txt'))
+        await symlink('loop-a.txt', join(dir, 'loop-b.txt'))
+        expect((await confineWriteTarget(dir, 'loop-a.txt/new.txt')).status).toBe('escape')
+      } finally {
+        await rm(outside, { recursive: true, force: true })
+      }
+      // Lexical escapes still rejected.
+      expect((await confineWriteTarget(dir, '../x.txt')).status).toBe('escape')
+      expect((await confineWriteTarget(dir, '/etc/x.txt')).status).toBe('escape')
+      // Non-existent workspace root → escape.
+      expect((await confineWriteTarget(join(dir, 'nope'), 'x.txt')).status).toBe('escape')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('parsePorcelain extracts paths', () => {

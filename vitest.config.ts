@@ -8,7 +8,15 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json-summary'],
       include: ['src/**/*.ts'],
-      exclude: ['src/consumers/**', 'src/index.ts'],
+      // Only the pure entry re-export is excluded — security-critical modules
+      // (scope/path confinement, consumers) must stay measured (AGENTS.md).
+      exclude: ['src/index.ts'],
+      thresholds: {
+        statements: 80,
+        branches: 68,
+        functions: 80,
+        lines: 80,
+      },
     },
   },
 })
