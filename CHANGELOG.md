@@ -2,23 +2,60 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.1.0-beta.8-keeyahto.1] - 2026-08-20
 
-## [0.1.0-beta.7-keeyahto.1] - 2026-08-19
+> Fork pre-release merged on top of upstream `0.1.0-beta.8`. Brings in the
+> upstream security/verifier/realpath changes plus our Windows-portability
+> fixes (DEP-01). SemVer pre-release tag `-keeyahto.1` sorts after the
+> upstream `0.1.0-beta.8` and replaces `-keeyahto.0` if you installed a
+> prior dry-run tag. **Upstream-bug fix:** upstream beta.8 left
+> `src/index.ts` `VERSION` at `0.1.0-beta.7` while bumping
+> `package.json` to `0.1.0-beta.8`; this release synchronizes both to
+> `0.1.0-beta.8-keeyahto.1`.
 
-> Fork pre-release for install-smoke validation. Same SemVer pre-release
-> tag (`-keeyahto.1`) so npm/pnpm sorts it **after** `0.1.0-beta.7` and
-> before any later beta. Replaces `-keeyahto.0` if you installed a prior
-> dry-run tag.
+### Fork-specific (carry-over from beta.7-keeyahto.1)
 
-### Fixed
+- **Platform-aware workspaceRoot validation (DEP-01, Forge vNext §DEP-01)**:
+  `validateScope` in `src/domain/aggregate.ts` previously used POSIX-only
+  `startsWith('/')` and rejected every Windows absolute path (`C:\repo`,
+  `C:/repo`, `D:\...`). Switched to Node's platform-aware `path.isAbsolute`,
+  matching `src/verification/policy.ts:64`. Windows users on rc.7+ no longer
+  hit `'workspaceRoot must be an absolute path or empty'` for valid paths.
+  **Not fixed upstream yet** even at upstream beta.8, so we keep our patch.
 
-- **Platform-aware workspaceRoot validation**（DEP-01, Forge vNext plan §DEP-01）:`validateScope` in `src/domain/aggregate.ts` previously used POSIX-only `startsWith('/')` and rejected every Windows absolute path (`C:\repo`, `C:/repo`, `D:\...`). Switched to Node's platform-aware `path.isAbsolute`, matching the existing shape in `src/verification/policy.ts:64`. Windows users on rc.7+ no longer hit `'workspaceRoot must be an absolute path or empty'` for valid paths. Acceptance cases from the plan now pass on both POSIX and Windows. Empty-string sentinel (`''` = "no workspace root") preserved.
+- **Windows-only test portability**: pre-existing tests failed on Windows
+  due to platform assumptions.
+  - `test/privacy/privacy.test.ts` — `new URL(..., import.meta.url).pathname`
+    produced `/D:/...` and `readFileSync` produced double-drive paths.
+    Switched to `fileURLToPath` (real native path on every platform).
+  - Upstream `0.1.0-beta.8` replaced the primitive itself (now async
+    realpath-aware `resolveScopedPath`), so the old POSIX-only unit test
+    was superseded by upstream's platform-neutral temp-directory test.
+  - No production semantics added or changed in the fork; DEP-01 is
+    the only fork-only production patch.
 
-- **Windows-only test portability**: three pre-existing tests failed on Windows due to platform assumptions:
-  - `test/privacy/privacy.test.ts:54` and `:82` — `new URL('../../src/', import.meta.url).pathname` produced `/D:/...`, then `readFileSync` produced `D:\D:\...` (double-drive). Switched to `fileURLToPath`, which gives a real native path on every platform.
-  - `test/unit/verification.test.ts:223` — `resolveScopedPath` test hardcoded POSIX `/ws` and expected `/ws/src/a.ts` output, which Node's platform-native `path.resolve` does not produce on Windows. Switched to platform-aware fixtures derived from `process.cwd()` plus an explicit relative-escape case.
-  - No production semantics changed — all three fixes are confined to test setup.
+## [0.1.0-beta.8] - 2026-08-20
+
+### Security（第三轮评审：P1 修复）
+
+- **主动验证器不再产生错误的 `pass`**：新增统一基础设施失败门控——命令超时 / 启动失败（`exitCode === null`）/ 输出截断一律判定 `unknown`，绝不进入解析。此前：不存在的 `diagnostic-count` 命令产生 `0 errors / 0 warnings → pass`；非 git 目录中 `git-scope` 把 git 错误输出解析为变更路径并可 `pass`。
+  - `git-scope`：`git rev-parse HEAD` 与 `git status --porcelain` 都必须成功退出（exit 0）才解析；任一失败 → `unknown`（`verifier` 未知事实，绝不用空 violations 的 git-scope 事实暗示 pass）；
+  - `diagnostic-count`：非零退出且解析不到任何诊断 → `unknown`（工具崩溃）；tsc/eslint 语义保留（非零退出 + 有诊断 → `fail`）；
+  - TAP test-report：超时/截断 → `unknown`；非零退出 + 合法 TAP 仍按计数判定。
+- **符号链接路径逃逸修复**：新增 `src/verification/paths.ts`——现有目标（读/删/存在性）校验 `realpath(target)` 必须落在 `realpath(workspaceRoot)` 内；新建目标（写）向上回溯最近存在祖先并校验其 realpath。此前 `workspace/link.txt -> /tmp/outside/secret.txt` 可被 `file-digest` 读取并 `pass`。
+  - 覆盖：`file-exists` / `file-absent` / `file-digest` / `json-schema` / JUnit `reportPath` / 契约导入（`/outcome import`）/ 导出写入（`export --out`）/ contribute approve（写目录）/ revoke（删目录）；
+  - 逃逸 → `unknown`（verifier）/ `invalid-input`（命令），绝不 pass；工作区内部符号链接不受影响。
+
+### Added
+
+- **双语 README**：`README.md`（英文，含运行时图）与 `README.zh.md`（中文镜像）；`files` 清单纳入 `README.zh.md`。
+- 覆盖度量不再排除 `src/consumers/**`（AGENTS.md 禁止排除安全关键文件），并设置项目级阈值（statements 80 / branches 68 / functions 80 / lines 80）；CI 新增 `pnpm test:coverage` 强制执行。
+- **真实宿主生命周期 E2E（DSH rc.8 实测通过）**：`dsh plugin add` → `--dump-config`（三行注入）→ 真实 `boot()` 全树加载（0 错误，三行 ACTIVE，`outcome_loop` domain 打开）→ 真实 agent + 真实 `/outcome new / criterion add-command / verify / status` 命令 → 新进程 resume 同一 session 重启读取上一进程契约 → 卸载。E2E 同时发现并文档化了 `storageDomain` 前置条件：官方 `dsh-base` bundle 不含 storage 行，裸 profile 安装需补 `@deepseek-ai/dsh-storage-domain` + patch 行（配方见 README/COMPATIBILITY §4）。
+
+### Changed
+
+- 测试 148 → **151**（verifier 门控、git 真实仓库正/反例、符号链接逃逸回归、realpath 边界单元测试）。
+- `package.json` 升至 `0.1.0-beta.8`；本 fork 进一步把 `src/index.ts` 的 `VERSION` 与 `package.json` 对齐到 `0.1.0-beta.8-keeyahto.1`（upstream beta.8 内部已经存在版本字符串漂移，本 fork 在发布时修复）。
 
 ## [0.1.0-beta.7] - 2026-08-18
 

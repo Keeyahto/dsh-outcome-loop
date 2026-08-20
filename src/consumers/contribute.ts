@@ -141,7 +141,7 @@ export function apply(ctx: Context, config: ContributeConfig): void {
               return { kind: 'error', text: 'approve requires --out <dir>' }
             }
             const summaryOnly = args.includes('--summary-only')
-            const targetResult = await resolveScopedTarget(invocation, resolvedDir)
+            const targetResult = await resolveScopedTarget(invocation, resolvedDir, 'write')
             if (!targetResult.ok) return { kind: 'error', text: formatError(targetResult.error) }
             const target = targetResult.value
             const { access, mkdir, rm, writeFile } = await import('node:fs/promises')
@@ -199,7 +199,7 @@ export function apply(ctx: Context, config: ContributeConfig): void {
             if (!args.includes('--yes')) {
               return { kind: 'error', text: 'revoke requires --yes; it DELETES the dataset directory (withdrawal)' }
             }
-            const targetResult = await resolveScopedTarget(invocation, resolvedDir)
+            const targetResult = await resolveScopedTarget(invocation, resolvedDir, 'read')
             if (!targetResult.ok) return { kind: 'error', text: formatError(targetResult.error) }
             const { rm } = await import('node:fs/promises')
             await rm(targetResult.value, { recursive: true, force: true })
@@ -215,23 +215,30 @@ export function apply(ctx: Context, config: ContributeConfig): void {
   })
 }
 
-/** Workspace-scoped path resolution shared with the outcome command. */
+/**
+ * Workspace-scoped path resolution shared with the outcome command:
+ * approve writes a NEW directory, so its nearest existing ancestor must be
+ * realpath-confined; revoke deletes an existing directory, so the directory
+ * itself must resolve inside the workspace (a symlink pointing out is
+ * rejected — withdrawal must never delete outside content).
+ */
 async function resolveScopedTarget(
   invocation: { agent: { session: { header: { cwd?: string } } } },
   path: string,
+  mode: 'write' | 'read',
 ): Promise<OutcomeResult<string>> {
   const cwd = invocation.agent.session.header.cwd
   if (cwd === undefined) {
     return err('invalid-input', 'this session has no workspace root (cwd)')
   }
-  const { isAbsolute, resolve, relative } = await import('node:path')
-  if (isAbsolute(path)) return err('invalid-input', 'path must be workspace-relative')
-  const target = resolve(cwd, path)
-  const rel = relative(cwd, target)
-  if (rel.startsWith('..') || isAbsolute(rel)) {
+  const paths = await import('../verification/paths.ts')
+  const scoped = mode === 'write'
+    ? await paths.confineWriteTarget(cwd, path)
+    : await paths.resolveScopedPath(cwd, path)
+  if (scoped.status === 'escape' || scoped.path === undefined) {
     return err('invalid-input', `path '${path}' escapes the workspace`)
   }
-  return ok(target)
+  return ok(scoped.path)
 }
 
 function formatError(error: { code: string; message: string }): string {

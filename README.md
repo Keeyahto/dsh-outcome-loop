@@ -1,68 +1,94 @@
 # dsh-outcome-loop
 
-任务结果账本与验收插件 · Task outcome ledger & acceptance plugin for DeepSeek Harness (DSH)
+Task outcome ledger & acceptance plugin for DeepSeek Harness (DSH) · 任务结果账本与验收插件
 
-**用尽量零 token、可机械复核的证据，帮助用户知道任务是否真的完成，并把结果沉淀为用户自己的可迁移经历。**
+**Know whether a task was actually completed — with near-zero extra tokens and mechanically re-checkable evidence — and keep the result as a portable, user-owned record.**
 
-`dsh-outcome-loop` 是一个本地优先、用户所有、厂商中立的任务结果账本与验收插件。它把一次 DSH 会话中的目标、约束、验收条件、执行证据、用户反馈、成本和最终结果组织成可复查的任务记录。
+`dsh-outcome-loop` is a local-first, user-owned, vendor-neutral task outcome ledger and acceptance plugin for DSH. It organizes one DSH session's goal, constraints, acceptance criteria, execution evidence, user feedback, cost, and final result into a re-auditable task record.
 
-- **阻止"模型说完成了"被误当成"任务真的完成了"**：验收以测试、构建、lint、退出码、文件状态等机械证据为准；
-- **默认零额外模型成本**：不发起额外 LLM 调用、不注册模型可见工具、不注入 system prompt；
-- **默认本地、默认无网络**：所有结果数据保存在用户自己的 DSH storage backend；
-- **用户拥有并控制数据**：可查看、删除、导出，导出前可预览脱敏结果；
-- **区分成功、失败、未验证、证据过期、用户接受和用户放弃**，绝不把未知自动转换为成功。
+- **Stops "the model said done" from being mistaken for "the task is done"**: acceptance is based on mechanical evidence — tests, build, lint, exit codes, file state, diagnostics, git scope;
+- **Zero extra model cost by default**: no extra LLM calls, no model-visible tools, no system-prompt injection;
+- **Local by default, offline by default**: all result data lives in your own DSH storage backend;
+- **User owns and controls the data**: inspect, delete, or export — with a preview + redaction gate before any export;
+- **Separates success, failure, unknown, stale evidence, user acceptance and user abandonment** — an unknown is never silently converted into a success.
 
-## 快速开始
+## Quick start
 
-### 安装
+### Install
 
 ```bash
-# 从 npm（发布后）或 GitHub 源码构建
+# From source
 pnpm install
 pnpm build
-pnpm pack   # 生成 dsh-outcome-loop-<version>.tgz
+pnpm pack   # produces dsh-outcome-loop-<version>.tgz
 
-# 安装进 DSH profile
-dsh plugin --profile <name> add ./dsh-outcome-loop-0.1.0-beta.7.tgz
+# Install into a DSH profile
+dsh plugin --profile <name> add ./dsh-outcome-loop-0.1.0-beta.8-keeyahto.1.tgz
 ```
 
-Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
+> **Prerequisite — `storageDomain` (real-host verified)**: the plugin requires
+> the `storageDomain` service, which the official `dsh-base` bundle does **not**
+> provide (only upper bundles such as `@deepseek-ai/dsh-web-app` do; the `web`
+> profile already has it). On a bare/headless profile, add it once:
+>
+> ```bash
+> dsh plugin --profile <name> add @deepseek-ai/dsh-storage-domain@0.1.0-rc.8
+> # then append to ~/.dsh/profiles/<name>/cordis.patch.yml:
+> # - insert:
+> #     - id: storage
+> #       name: "@deepseek-ai/dsh-storage"
+> #     - id: storage-json
+> #       name: "@deepseek-ai/dsh-storage-json"
+> #       config:
+> #         root: !!js dshHomePath("storages")
+> #     - id: storage-domain
+> #       name: "@deepseek-ai/dsh-storage-domain"
+> #       config:
+> #         backend: json
+> ```
+>
+> Without it the profile boot fails loud with `waiting for service:
+> storageDomain` (fail-loud by design; see [COMPATIBILITY.md](COMPATIBILITY.md) §4
+> for the verified lifecycle: add → dump-config → boot → real `/outcome`
+> commands → restart-read → uninstall).
 
-| 行 | 作用 |
+The bundle mounts four plugin rows (see `cordis.patch.yml`):
+
+| Row | Role |
 | --- | --- |
-| `outcome-loop` | 核心服务 `ctx.outcomeLoop` + session 观察器 + 本地 sidecar 存储 |
-| `outcome-loop-commands` | 人类命令 `/outcome`（创建契约、验收、反馈、导出） |
-| `outcome-loop-projection` | 可选 Web session 投影（headless 环境自动跳过） |
-| `outcome-loop-contribute` | **默认未安装**：贡献模式数据集准备（需手动添加行 + `contribute.enabled: true`，见下） |
+| `outcome-loop` | Core service `ctx.outcomeLoop` + session observer + local sidecar storage |
+| `outcome-loop-commands` | Human commands `/outcome` (contract, verification, feedback, export) |
+| `outcome-loop-projection` | Optional web session projection (auto-skipped headless) |
+| `outcome-loop-contribute` | **Not installed by default**: contribution-dataset preparation (add the row manually + `contribute.enabled: true`, see below) |
 
-### 使用（通过 `/outcome` 命令）
+### Use (via `/outcome`)
 
 ```
-/outcome new 修复登录页按钮在移动端溢出问题        # 创建任务契约
-/outcome criterion add 移动端 375px 宽度下无横向滚动  # 添加验收标准（manual）
-/outcome criterion add-command "pnpm test"          # 添加命令验收（退出码 0）
-/outcome criterion add-test                          # 添加测试验收
-/outcome criterion add-file dist/bundle.js          # 添加产物文件验收
+/outcome new 修复登录页按钮在移动端溢出问题        # create a task contract
+/outcome criterion add 移动端 375px 宽度下无横向滚动  # add an acceptance criterion (manual)
+/outcome criterion add-command "pnpm test"          # command criterion (exit code 0)
+/outcome criterion add-test                          # test-report criterion
+/outcome criterion add-file dist/bundle.js          # artifact file criterion
 /outcome criterion add-test --min-passed 2 --max-failed 1
-                                                     # 结构化测试计数（TAP 输出自动解析）
-/outcome verify                                     # 运行验收（被动观察，不执行新命令）
-/outcome status                                     # 查看机械验证 + 用户 disposition 双轴结果
-/outcome accept | reject | revise | abandon         # 用户对结果的态度（与机械验证独立）
-/outcome export [<contract>]                             # 两阶段导出：预览 → digest
+                                                     # structured test counts (TAP auto-parsed)
+/outcome verify                                     # run verification (passive observation only)
+/outcome status                                     # mechanical verification × user disposition
+/outcome accept | reject | revise | abandon         # user disposition (independent axis)
+/outcome export [<contract>]                             # two-phase export: preview → digest
 /outcome export <contract> --approve <digest> --out <path> [--overwrite]
-                                                     # 批准并原子写入 JSONL 文件
-/outcome exports [<contract>]                        # 列出导出 manifest
-/outcome import <path>                              # 导入结构化 Task Contract 文件（outcome-loop.contract.v1）
-/outcome export-contract <id> --out <path>          # 导出契约文件
-/outcome cost [<contract>] [--summary]              # token 用量（可选价格表 → 货币成本估计；--summary 聚合多契约）
-/outcome calibration [<contract>]                 # dsh-code-reference 决策校准（预测 × 实际）
-/outcome skills [--out <path>]                    # Skill 候选（只读聚合，人工评估，永不自动应用）
-/outcome delete <contract-id> --yes                 # 删除 sidecar 数据（会话日志永不触碰）
+                                                     # approve and atomically write JSONL
+/outcome exports [<contract>]                        # list export manifests
+/outcome import <path>                              # import a Task Contract file (outcome-loop.contract.v1)
+/outcome export-contract <id> --out <path>          # export a contract file
+/outcome cost [<contract>] [--summary]              # token usage (+ optional price table → cost)
+/outcome calibration [<contract>]                 # dsh-code-reference decision calibration
+/outcome skills [--out <path>]                    # skill candidates (read-only aggregation)
+/outcome delete <contract-id> --yes                 # delete sidecar data (session log untouched)
 ```
 
-### 贡献模式（默认关闭，ADR-0005）
+### Contribution mode (off by default, ADR-0005)
 
-贡献模式是独立、默认未安装的消费者。手动添加到 profile 的 patch：
+Contribution mode is a separate, not-installed-by-default consumer. Add it manually to the profile patch:
 
 ```yaml
 - insert:
@@ -73,42 +99,42 @@ Bundle 会挂载三个插件行（见 `cordis.patch.yml`）：
 ```
 
 ```text
-/contribute preview <contract>                 # 批次预览（字段/敏感命中/digest）
+/contribute preview <contract>                 # batch preview (fields/sensitivity/digest)
 /contribute approve <digest> <contract> --out <dir> [--summary-only]
-                                               # 写入 consent manifest + records.jsonl（或 summary.json）
-/contribute revoke <contract> --out <dir> --yes  # 撤回 = 删除数据集目录
+                                               # writes consent manifest + records.jsonl (or summary.json)
+/contribute revoke <contract> --out <dir> --yes  # withdrawal = delete the dataset directory
 ```
 
-数据集只包含导出 v1 最小字段（无消息正文/代码/凭据/绝对路径），确定性脱敏门在任何敏感命中时阻断整批；插件**不执行任何上传**，交付由用户自行决定。
+Datasets contain only the export-v1 minimal fields (no message bodies / code / credentials / absolute paths); the deterministic redaction gate blocks a whole batch on any sensitive hit; the plugin **never uploads anything** — delivery is entirely the user's decision.
 
-### 通过 Host API
+### Via the Host API
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
 
-// 创建契约
+// Create a contract
 const created = await ctx.outcomeLoop.createContract({
   sessionId: session.id,
-  goalText: '修复登录 bug',
+  goalText: 'fix login bug',
   workspaceRoot: session.header.cwd,
   criteria: [
-    { description: 'pnpm test 通过', kind: 'command-exit',
+    { description: 'pnpm test passes', kind: 'command-exit',
       specification: { kind: 'command-exit', command: 'pnpm test', expectExitCode: 0 } },
   ],
 })
 // created: OutcomeResult<TaskContract>
 
-// 运行验收（被动：只观察已有事件，绝不自动执行命令）
+// Run verification (passive: observes existing events, never executes commands on its own)
 const run = await ctx.outcomeLoop.verify({ contractId: created.value.id })
 
-// 用户 disposition（与机械验证独立的两条轴）
+// User disposition (an independent axis from mechanical verification)
 await ctx.outcomeLoop.setDisposition({ contractId, status: 'accepted' })
 
-// 两阶段导出
+// Two-phase export
 const preview = await ctx.outcomeLoop.previewExport({ contractId })
 const receipt = await ctx.outcomeLoop.exportJsonl({ contractId, previewDigest: preview.value.previewDigest })
 
-// 记录 dsh-code-reference（或任意集成）的先前决策证据（§15，只用于用户校准）
+// Record a prior decision from dsh-code-reference (or any integration, §15 — calibration only)
 await ctx.outcomeLoop.recordDecisionEvidence({
   contractId,
   source: 'dsh-code-reference',
@@ -118,87 +144,110 @@ await ctx.outcomeLoop.recordDecisionEvidence({
 })
 ```
 
-完整 API 见 `src/service.ts` 的 `OutcomeLoopApi`。
+The full API surface is `OutcomeLoopApi` in `src/service.ts`.
 
-## 概念模型
+## Runtime flow
 
-任务结果不是一个布尔值，至少维护五条互相独立的轴（详细规则见 [ARCHITECTURE.md](ARCHITECTURE.md) 与 `src/domain/reducer.ts`）：
+```mermaid
+flowchart LR
+    A[DSH session events] -->|observer| B[fact log<br/>session-sidecar]
+    C[/outcome new + criteria/] --> D[TaskContract<br/>outcome_loop domain]
+    E[verify] --> F{policy allows<br/>active checks?}
+    F -- no --> G[passive: replay facts<br/>+ prior evidence]
+    F -- yes --> H[active: sandboxed commands<br/>file / git / diagnostics / TAP]
+    G --> I[VerificationRun]
+    H --> I
+    I --> J[disposition: accept/reject...]
+    J --> K[outcome view<br/>mechanical × user axes]
+    K --> L[two-phase export<br/>preview → digest → JSONL]
+```
 
-| 轴 | 典型值 |
+Active verification is **never run by default**: the policy layer gates every invocation (`autoRun`, `allowedVerifierIds`, timeout, output cap, allowlisted env). Commands are spawned argv-first — never through a shell string.
+
+### Active-verifier safety (beta.8)
+
+- **Infrastructure failures are always `unknown`**: a command that timed out, failed to start, or had its output truncated is never parsed into pass/fail evidence; `git-scope` requires both git commands to exit 0 (non-repo directories are `unknown`, never `pass`, and git stderr is never parsed as changed paths); `diagnostic-count` treats a non-zero exit with zero parsed diagnostics as `unknown` (tool crash) while keeping tsc/eslint semantics (non-zero + findings → `fail`);
+- **Workspace confinement is realpath-based**: every user- or contract-supplied path is checked against `realpath` of the workspace root — reads (`file-exists`, `file-digest`, `json-schema`, JUnit `reportPath`, contract import) and writes (export `--out`, contribute approve/revoke) reject symlinks escaping the workspace (`unknown`/error, never pass); in-workspace symlinks keep working.
+
+## Conceptual model
+
+A task result is not a boolean. The ledger keeps at least five mutually independent axes (full rules in [ARCHITECTURE.md](ARCHITECTURE.md) and `src/domain/reducer.ts`):
+
+| Axis | Values |
 | --- | --- |
-| 执行状态 | `active` / `ended` / `aborted` / `blocked` |
-| 验证状态 | `not-run` / `passed` / `failed` / `inconclusive` |
-| 用户 disposition | `none` / `accepted` / `rejected` / `revised` / `abandoned` |
-| 标签强度 | `strong` / `medium` / `weak` / `unknown` |
-| 数据资格 | `private-only` / `exportable` / `contribution-approved` |
+| Execution status | `active` / `ended` / `aborted` / `blocked` |
+| Verification status | `not-run` / `passed` / `failed` / `inconclusive` |
+| User disposition | `none` / `accepted` / `rejected` / `revised` / `abandoned` |
+| Label strength | `strong` / `medium` / `weak` / `unknown` |
+| Data eligibility | `private-only` / `exportable` / `contribution-approved` |
 
-机械验证失败时，用户仍可以出于其他原因接受结果；用户接受也不能抹去机械失败。两者同时保留。
+A user may accept a result even when mechanical verification failed — and user acceptance never erases the mechanical failure. Both axes are kept.
 
-## 验收聚合规则（摘要）
+## Verification aggregation (summary)
 
-1. 任一 required + blocking criterion 为 `fail` → 总验证 `failed`；
-2. 无失败但至少一个 required criterion 为 `unknown` → `inconclusive`；
-3. 全部 required 为 `pass`/`not-applicable` → `passed`；
-4. 未执行任何验证 → `not-run`；
-5. warning criterion 不改变 passed/failed，但必须展示；
-6. 互相冲突的当前证据默认 → `inconclusive`，绝不挑选对成功有利的一条；
-7. contract revision 变化、workspace 变化、超龄 → 旧证据 `stale`，stale 不参与 pass；
-8. 用户 acceptance 只改变 disposition，不改变机械验证结果；
-9. LLM Judge（未来独立插件）最多产生 `weak` 标签。
+1. Any required + blocking criterion `fail` → overall `failed`;
+2. No failure but at least one required criterion `unknown` → `inconclusive`;
+3. All required `pass`/`not-applicable` → `passed`;
+4. Nothing verified → `not-run`;
+5. Warning criteria do not change passed/failed but are always shown;
+6. Conflicting current evidence → `inconclusive` by default — never pick the success-favoring row;
+7. Contract revision change, workspace change, or stale age → old evidence is `stale`; stale rows never imply pass;
+8. User acceptance only changes disposition, not mechanical verification;
+9. An LLM judge (future, separate plugin) can at most produce a `weak` label.
 
-## 隐私与安全（摘要）
+## Privacy & security (summary)
 
-- 默认零模型调用、零网络、零主动命令执行；
-- 只保存结构化事实：命令摘要、退出码、计数、digest、seq 引用 —— **绝不复制**完整 prompt、工具参数、工具输出、源代码或消息正文；
-- outcome 数据存独立 sidecar domain（`outcome_loop`），**永不写入 session log**，不进入 telemetry；
-- 导出是显式的两阶段操作：preview（含 digest）→ 批准（digest 绑定，内容变化即失效）；
-- 完整威胁模型见 [SECURITY.md](SECURITY.md)，默认配置硬门槛见 [PRIVACY.md](PRIVACY.md)。
+- Zero model calls, zero network, zero proactive command execution by default;
+- Only structured facts are stored: command digests, exit codes, counts, digests, seq references — **never** full prompts, tool arguments, tool output, source code, or message bodies;
+- Outcome data lives in a separate sidecar domain (`outcome_loop`), **never in the session log**, never in telemetry;
+- Export is an explicit two-phase operation: preview (with digest) → approval (digest-bound; content changes invalidate it);
+- Full threat model: [SECURITY.md](SECURITY.md); default hard privacy gates: [PRIVACY.md](PRIVACY.md).
 
-## 目录结构
+## Repository layout
 
 ```text
 src/
-├── domain/        # 纯领域层：ids / types / errors / reducer / aggregate / freshness（无 DSH 依赖）
-├── dsh/           # DSH 适配层：events 归一化 / observer / replay / registry / token-bridge / feedback-bridge / compatibility
-├── persistence/   # storage-domain sidecar：schema / repository / queue / repair
-├── verification/  # 验证引擎：registry / policy / engine / adapters(passive, active)
-├── export/        # 导出：redact / schema / preview / jsonl
-├── consumers/     # /outcome 命令 + 可选 projection（只调用 service，不含领域真相）
-├── service.ts     # ctx.outcomeLoop（OutcomeLoopApi）
-├── config.ts      # Schemastery 配置（默认值锁定安全侧）
-└── index.ts       # 插件入口
+├── domain/        # pure domain: ids / types / errors / reducer / aggregate / freshness (no DSH deps)
+├── dsh/           # DSH adapters: events / observer / replay / registry / token-bridge / feedback-bridge / compatibility
+├── persistence/   # storage-domain sidecar: schema / repository / queue / repair
+├── verification/  # engine: registry / policy / engine / adapters(passive, active) / paths (realpath confinement)
+├── export/        # redact / schema / preview / jsonl
+├── consumers/     # /outcome commands + optional projection (service-only, no domain truth)
+├── service.ts     # ctx.outcomeLoop (OutcomeLoopApi)
+├── config.ts      # Schemastery config (defaults locked to the safe side)
+└── index.ts       # plugin entry
 ```
 
-## 开发
+## Development
 
 ```bash
 pnpm install
 pnpm typecheck     # tsc --noEmit
 pnpm lint          # eslint
-pnpm test          # vitest（148 用例）
-pnpm test:coverage # 覆盖率（安全关键文件目标 100% branch）
+pnpm test          # vitest (151 tests)
+pnpm test:coverage # coverage with thresholds (security-critical code targets 100% branch)
 pnpm build         # tsc → lib/
-pnpm pack          # npm tarball（dsh plugin add 安装）
-pnpm smoke         # plain Node 导入构建产物冒烟
+pnpm pack          # npm tarball (dsh plugin add install)
+pnpm smoke         # plain-Node import smoke of the built bundle
 ```
 
-测试矩阵：Node 22.19+ / Node 24（`engines`），CI 见 `.github/workflows/ci.yml`。所有测试在没有 `DEEPSEEK_API_KEY` 时完整通过。
+Test matrix: Node 22.19+ / Node 24 (`engines`), CI in `.github/workflows/ci.yml`. Coverage thresholds (statements 80 / branches 68 / functions 80 / lines 80) are enforced in CI; security-critical modules (path confinement, consumers) are never excluded from measurement.
 
-## 与 dsh-code-reference 的关系
+## Relationship to dsh-code-reference
 
-[dsh-code-reference](https://github.com/victorzhong0110/dsh-code-reference) 负责开发前的候选发现与复用决策；本插件负责开发后的事实校验。二者独立安装、单向可选集成：outcome-loop 不 import code-reference 的内部文件。
+[dsh-code-reference](https://github.com/victorzhong0110/dsh-code-reference) handles pre-development candidate discovery and reuse decisions; this plugin handles post-development factual verification. They install independently with a one-way optional integration: outcome-loop never imports code-reference internals.
 
-## 文档
+## Docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — 架构决策、分层规则、事件流、重放与幂等
-- [PRIVACY.md](PRIVACY.md) — 默认隐私硬门槛与数据最小化
-- [SECURITY.md](SECURITY.md) — 威胁模型与控制
-- [DATA_FORMAT.md](DATA_FORMAT.md) — sidecar 表结构与开放导出格式
-- [COMPATIBILITY.md](COMPATIBILITY.md) — DSH 兼容矩阵与发布基线
-- [CHANGELOG.md](CHANGELOG.md) — 变更记录
+- [ARCHITECTURE.md](ARCHITECTURE.md) — architecture decisions, layering, event flow, replay & idempotency
+- [PRIVACY.md](PRIVACY.md) — default privacy hard gates and data minimization
+- [SECURITY.md](SECURITY.md) — threat model and controls
+- [DATA_FORMAT.md](DATA_FORMAT.md) — sidecar schema and open export format
+- [COMPATIBILITY.md](COMPATIBILITY.md) — DSH compatibility matrix and release baseline
+- [CHANGELOG.md](CHANGELOG.md) — change log
 
 ## License
 
-MIT — 详见 [LICENSE](LICENSE)。
+MIT — see [LICENSE](LICENSE).
 
-**DSH 兼容性声明**：本插件针对 DeepSeek Harness `0.1.0-rc.7` 开发并验证（见 [COMPATIBILITY.md](COMPATIBILITY.md)）。DSH 处于 developer preview，API 可能发生破坏性变化；升级前请核对兼容矩阵。
+**DSH compatibility statement**: developed and verified against DeepSeek Harness `0.1.0-rc.7` (see [COMPATIBILITY.md](COMPATIBILITY.md)). DSH is in developer preview and its APIs may change incompatibly; check the compatibility matrix before upgrading.

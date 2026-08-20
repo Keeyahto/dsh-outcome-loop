@@ -24,6 +24,9 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # Coverage thresholds are enforced here (vitest.config.ts); the run
+      # also fails the job when the project-wide floor is breached.
+      - run: pnpm test:coverage
       - run: pnpm build
       - run: pnpm smoke
       - run: pnpm pack

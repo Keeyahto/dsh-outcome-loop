@@ -18,6 +18,16 @@ import { OutcomeLoopService } from '../../src/service.ts'
 import { outcomeDomainSpec } from '../../src/persistence/schema.ts'
 import { Config, configDigest, type ConfigType } from '../../src/config.ts'
 
+/** Poll a condition instead of sleeping a fixed interval (CI/coverage-safe). */
+async function eventually(check: () => boolean, label: string, timeoutMs = 3000): Promise<void> {
+  const start = Date.now()
+  for (;;) {
+    if (check()) return
+    if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${label}`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
 let ctx: Context
 let root: string
 let facility: DomainFacility
@@ -267,7 +277,10 @@ describe('OutcomeLoopService', () => {
     emit('session/event', session, { type: 'turn/end', seq: 2, time: 2000, data: { turn: 1, reason: { kind: 'completed' } } })
     // Duplicate delivery must be deduplicated by seq.
     emit('session/event', session, { type: 'turn/end', seq: 2, time: 2000, data: { turn: 1, reason: { kind: 'completed' } } })
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await eventually(
+      () => service.registry.getLog('s-live')?.facts.length === 2 && service.repository.getCursor('s-live')?.lastSeq === 2,
+      'live observation facts (dedup by seq)',
+    )
 
     const log = service.registry.getLog('s-live')
     expect(log?.facts).toHaveLength(2)
@@ -288,7 +301,15 @@ describe('OutcomeLoopService', () => {
       ],
     }
     emit('session/created', session)
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await eventually(
+      () => {
+        const log = service.registry.getLog('s-resume')
+        return log !== undefined && log.seqEnd === 3
+          && log.facts.some((f) => f.kind === 'user-message')
+          && log.facts.some((f) => f.kind === 'turn-end')
+      },
+      'resume replay facts',
+    )
 
     const log = service.registry.getLog('s-resume')
     expect(log?.seqEnd).toBe(3)

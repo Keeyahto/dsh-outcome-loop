@@ -3,16 +3,51 @@
  * active runner primitives (security-relevant — target high branch coverage).
  */
 
-import { isAbsolute, resolve } from 'node:path'
-
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import type { AcceptanceCriterion, Evidence, TaskContract } from '../../src/domain/types.ts'
 import { buildContract } from '../../src/domain/aggregate.ts'
 import { verifyPassive } from '../../src/verification/adapters/passive.ts'
-import { countDiagnostics, digestFile, parsePorcelain, resolveScopedPath, runCommand, splitArgs } from '../../src/verification/adapters/active.ts'
+import { countDiagnostics, digestFile, parsePorcelain, runCommand, splitArgs } from '../../src/verification/adapters/active.ts'
+import { confineWriteTarget, resolveScopedPath } from '../../src/verification/paths.ts'
 import { decideActiveRun } from '../../src/verification/policy.ts'
 import { impliesVerdict } from '../../src/verification/engine.ts'
+
+/**
+ * Detect whether the current OS / user can create symlinks. On Windows the
+ * privilege `SeCreateSymbolicLinkPrivilege` is granted only when Developer
+ * Mode is on or the process is elevated; absent privilege `node:fs/promises`
+ * `symlink()` throws EPERM. We probe with a probe symlink inside a fresh
+ * mkdtemp and remember the result so the check runs once per process.
+ *
+ * The probe is intentionally tiny: a single mkdtemp + symlink + cleanup.
+ * If it fails we skip every symlink-dependent branch of the security
+ * fixtures — the production code path (`realpath`-based containment) still
+ * runs and is covered by the lexical-escape assertions that need no
+ * symlinks.
+ */
+let _canSymlink: boolean | undefined
+async function canCreateSymlinksAsync(): Promise<boolean> {
+  if (_canSymlink !== undefined) return _canSymlink
+  const { mkdtemp, symlink, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'ol-symprobe-'))
+  try {
+    await symlink(join(dir, 'a'), join(dir, 'b'))
+    _canSymlink = true
+  } catch {
+    _canSymlink = false
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+  return _canSymlink
+}
+
+/** Synchronous variant after async probe has resolved. */
+function canCreateSymlinks(): boolean {
+  return _canSymlink === true
+}
 
 function criterion(over: Partial<AcceptanceCriterion>): AcceptanceCriterion {
   return {
@@ -52,6 +87,10 @@ function commandFactLog(exitCode: number, label = 'pnpm test', seq = 5) {
     workspaceEpoch: 0,
   }
 }
+
+beforeAll(async () => {
+  await canCreateSymlinksAsync()
+})
 
 describe('verifyPassive (spec §12.2)', () => {
   it('command-exit pass on matching observed command', () => {
@@ -221,19 +260,83 @@ describe('active runner primitives', () => {
     expect(capped.output.length).toBeLessThanOrEqual(100)
   })
 
-  it('resolveScopedPath rejects escapes', () => {
-    // Use a real absolute scope root on the current platform so that
-    // node:path's resolve() yields a platform-native absolute path that
-    // we can compare against without locking the test to a specific OS.
-    // The previous implementation hardcoded POSIX '/ws' which only worked
-    // when the test ran on POSIX CI.
-    const scopeRoot = isAbsolute(process.cwd()) ? process.cwd() : '/tmp'
-    const expected = resolve(scopeRoot, 'src/a.ts')
-    expect(resolveScopedPath(scopeRoot, 'src/a.ts')).toBe(expected)
-    expect(resolveScopedPath(scopeRoot, '../escape.ts')).toBeUndefined()
-    // /etc/passwd on POSIX escapes the cwd scope; on Windows C:/etc/passwd
-    // is an absolute path outside the cwd scope and is also rejected.
-    expect(resolveScopedPath(scopeRoot, resolve(scopeRoot, '../etc/passwd'))).toBeUndefined()
+  it('resolveScopedPath confines existing targets by realpath', async () => {
+    const { mkdtemp, writeFile, symlink, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'ol-paths-'))
+    try {
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(dir, 'src'))
+      await writeFile(join(dir, 'src', 'a.ts'), 'x')
+      const ok = await resolveScopedPath(dir, 'src/a.ts')
+      expect(ok.status).toBe('ok')
+      expect(ok.path).toBe(join(dir, 'src', 'a.ts'))
+      const absent = await resolveScopedPath(dir, 'missing.txt')
+      expect(absent.status).toBe('absent')
+      expect(absent.path).toBe(join(dir, 'missing.txt'))
+      expect((await resolveScopedPath(dir, '../escape.ts')).status).toBe('escape')
+      expect((await resolveScopedPath(dir, '/etc/passwd')).status).toBe('escape')
+      if (canCreateSymlinks()) {
+        // Symlink whose real target lives outside the workspace → escape.
+        const outside = await mkdtemp(join(tmpdir(), 'ol-paths-out-'))
+        try {
+          await writeFile(join(outside, 'secret.txt'), 's')
+          await symlink(join(outside, 'secret.txt'), join(dir, 'link.txt'))
+          const linked = await resolveScopedPath(dir, 'link.txt')
+          expect(linked.status).toBe('escape')
+          // In-workspace symlink stays allowed.
+          await symlink(join(dir, 'src', 'a.ts'), join(dir, 'inner-link.ts'))
+          expect((await resolveScopedPath(dir, 'inner-link.ts')).status).toBe('ok')
+          // Symlink loop (ELOOP) is unresolvable → escape, never a read target.
+          await symlink('loop-b.ts', join(dir, 'loop-a.ts'))
+          await symlink('loop-a.ts', join(dir, 'loop-b.ts'))
+          expect((await resolveScopedPath(dir, 'loop-a.ts')).status).toBe('escape')
+        } finally {
+          await rm(outside, { recursive: true, force: true })
+        }
+      }
+      // Unresolvable scope root → escape (no symlinks needed).
+      expect((await resolveScopedPath(join(dir, 'missing-root'), 'a.ts')).status).toBe('escape')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('confineWriteTarget rejects symlinked parents and symlink targets', async () => {
+    const { mkdtemp, writeFile, symlink, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'ol-write-'))
+    try {
+      // New file under a plain (existing) parent → ok.
+      expect((await confineWriteTarget(dir, 'new/file.txt')).status).toBe('ok')
+      if (canCreateSymlinks()) {
+        // New file under a parent symlinked outside → escape.
+        const outside = await mkdtemp(join(tmpdir(), 'ol-write-out-'))
+        try {
+          await symlink(outside, join(dir, 'linkdir'))
+          expect((await confineWriteTarget(dir, 'linkdir/new.txt')).status).toBe('escape')
+          // Existing target that is itself a symlink outside → escape.
+          await writeFile(join(outside, 'target.txt'), 'x')
+          await symlink(join(outside, 'target.txt'), join(dir, 'out-link.txt'))
+          expect((await confineWriteTarget(dir, 'out-link.txt')).status).toBe('escape')
+          // Symlink loop in the ancestor chain → escape.
+          await symlink('loop-b.txt', join(dir, 'loop-a.txt'))
+          await symlink('loop-a.txt', join(dir, 'loop-b.txt'))
+          expect((await confineWriteTarget(dir, 'loop-a.txt/new.txt')).status).toBe('escape')
+        } finally {
+          await rm(outside, { recursive: true, force: true })
+        }
+      }
+      // Lexical escapes still rejected (no symlinks needed).
+      expect((await confineWriteTarget(dir, '../x.txt')).status).toBe('escape')
+      expect((await confineWriteTarget(dir, '/etc/x.txt')).status).toBe('escape')
+      // Non-existent workspace root → escape.
+      expect((await confineWriteTarget(join(dir, 'nope'), 'x.txt')).status).toBe('escape')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('parsePorcelain extracts paths', () => {
