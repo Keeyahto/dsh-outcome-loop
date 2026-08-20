@@ -39,6 +39,7 @@ declare module '@deepseek-ai/cordis' {
 
 export interface OutcomeLoopApi {
   createContract(input: CreateContractInput): Promise<OutcomeResult<TaskContract>>
+  createOrGetContract(input: CreateContractInput): Promise<OutcomeResult<TaskContract>>
   reviseContract(ref: ContractRef, patch: ReviseContractInput): Promise<OutcomeResult<TaskContract>>
   addCriterion(contractId: ContractId, input: NewCriterionInput): Promise<OutcomeResult<TaskContract>>
   getContract(id: ContractId): Promise<OutcomeResult<TaskContract>>
@@ -292,6 +293,52 @@ export class OutcomeLoopService extends Service {
       return ok(this.repository.getContract(built.value.id) as TaskContract)
     } catch (error) {
       throw infrastructureError(error, 'createContract')
+    }
+  }
+
+  /**
+   * Crash-safe create-or-adopt keyed by an EXTERNAL idempotency key.
+   *
+   * The caller (e.g. Forge's activation saga) supplies the same stable
+   * `externalKey` on every attempt. `buildContract` derives the contract id
+   * deterministically from `(sessionId, externalKey)`, so:
+   *
+   *   - a retry of the same key derives the same id → `getContract` hits →
+   *     the SAME task contract is returned, never a second one;
+   *   - the key→contract relation is atomic *by construction* — the single
+   *     durable `put` of the contract is what binds the key, so there is no
+   *     window where the provider "succeeded" but nothing maps the key to a
+   *     contract (a forge-owned index written after the provider side effect
+   *     cannot give this guarantee).
+   *
+   * Concurrency: the check-then-put runs inside the per-session serialized
+   * queue, and because the id is deterministic two racing same-key calls
+   * derive the same id; the second call observes the first's put and adopts.
+   */
+  async createOrGetContract(input: CreateContractInput): Promise<OutcomeResult<TaskContract>> {
+    const mutable = this.assertMutable()
+    if (!mutable.ok) return mutable
+    if (typeof input.externalKey !== 'string' || input.externalKey.length === 0) {
+      return err('invalid-input', 'externalKey is required for createOrGetContract')
+    }
+    const built = buildContract(input)
+    if (!built.ok) return built
+    const existingId = this.repository.getContract(built.value.id)
+    if (existingId !== undefined) return ok(existingId)
+    const enforced = enforceEnterprisePolicy(built.value, this.enterpriseConstraints())
+    if (!enforced.ok) return enforced
+    try {
+      await this.serialized(built.value.sessionId, async () => {
+        // Re-check inside the queue slot so racing same-key calls can't
+        // double-mint (both would derive the same id).
+        if (this.repository.getContract(built.value.id) === undefined) {
+          await this.repository.putContract(built.value)
+        }
+      })
+      this.contractSessions.add(built.value.sessionId)
+      return ok(this.repository.getContract(built.value.id) as TaskContract)
+    } catch (error) {
+      throw infrastructureError(error, 'createOrGetContract')
     }
   }
 

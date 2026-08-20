@@ -46,6 +46,24 @@ export function deriveContractId(sessionId: SessionIdRef, goalSeq: number, seed:
   return `${PREFIXES.contract}-${contentHash(sessionId, goalSeq, seed)}` as ContractId
 }
 
+/**
+ * Deterministic contract id from an EXTERNAL idempotency key.
+ *
+ * The caller (e.g. Forge's activation saga) supplies a stable
+ * `externalKey` that it will re-send identically on every retry. Deriving
+ * the contract id from the key makes the key→contract relation atomic
+ * *by construction*: a single durable `put` of the contract is what binds
+ * the key, and any retry with the same `(sessionId, externalKey)` derives
+ * the same id and finds the existing contract — never a second one. This
+ * is the crash-safe seam that a post-hoc, forge-owned index cannot give
+ * (the index write happens after the external side effect). The `'x'`
+ * marker keeps the id namespace distinct from the legacy
+ * `deriveContractId` path.
+ */
+export function deriveContractIdFromExternalKey(sessionId: SessionIdRef, externalKey: string): ContractId {
+  return `${PREFIXES.contract}-${contentHash('x', sessionId, externalKey)}` as ContractId
+}
+
 /** Deterministic criterion id from contract + position index. */
 export function deriveCriterionId(contractId: ContractId, index: number): CriterionId {
   return `${PREFIXES.criterion}-${contentHash(contractId, index)}` as CriterionId

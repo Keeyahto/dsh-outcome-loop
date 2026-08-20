@@ -6,7 +6,7 @@
 import { isAbsolute } from 'node:path'
 
 import { err, ok, type OutcomeResult } from './errors.ts'
-import { contentHash, deriveContractId, deriveCriterionId, type ContractId, type CriterionId } from './ids.ts'
+import { contentHash, deriveContractId, deriveContractIdFromExternalKey, deriveCriterionId, type ContractId, type CriterionId } from './ids.ts'
 import type {
   AcceptanceCriterion,
   CriterionSpecification,
@@ -22,6 +22,14 @@ export interface CreateContractInput {
   /** Seq of the user/message (or turn/start) event carrying the goal. */
   goalSeq?: number
   goalText?: string
+  /**
+   * External idempotency key. When present the caller promises to re-send the
+   * SAME key on retry; the contract id is then deterministically derived from
+   * `(sessionId, externalKey)` so the key→contract relation is atomic by
+   * construction (see `createOrGetContract`). Absent ⇒ legacy `createContract`
+   * id derivation from `(sessionId, goalSeq, seed)`.
+   */
+  externalKey?: string
   workspaceRoot?: string
   criteria?: readonly NewCriterionInput[]
   verificationPolicy?: Partial<TaskContract['verificationPolicy']>
@@ -79,7 +87,13 @@ export function buildContract(input: CreateContractInput): OutcomeResult<TaskCon
   const createdAt = input.createdAt ?? Date.now()
   // Deterministic id: same session + same goal ⇒ same contract (duplicate
   // detection works); explicit goal text is hashed, never stored verbatim.
-  const id = deriveContractId(input.sessionId, input.goalSeq ?? -1, goalText.length > 0 ? contentHash(goalText) : createdAt)
+  // When the caller supplies an `externalKey`, the id is derived from that
+  // key instead (session + key), so every retry of the same key resolves to
+  // the same contract regardless of the `createdAt` clock/seed — this is the
+  // crash-safe idempotency seam `createOrGetContract` relies on.
+  const id = input.externalKey !== undefined && input.externalKey.length > 0
+    ? deriveContractIdFromExternalKey(input.sessionId, input.externalKey)
+    : deriveContractId(input.sessionId, input.goalSeq ?? -1, goalText.length > 0 ? contentHash(goalText) : createdAt)
   const criteria = buildCriteria(id, input.criteria ?? [])
 
   const contract: TaskContract = {
@@ -88,6 +102,7 @@ export function buildContract(input: CreateContractInput): OutcomeResult<TaskCon
     revision: 1,
     sessionId: input.sessionId,
     goal,
+    ...(input.externalKey !== undefined && input.externalKey.length > 0 ? { externalKey: input.externalKey } : {}),
     scope: {
       workspaceRoot: input.workspaceRoot ?? '',
       pathPrefixes: [],

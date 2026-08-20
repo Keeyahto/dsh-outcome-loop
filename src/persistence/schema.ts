@@ -125,6 +125,7 @@ const contractRowObject = z.object({
   revision: z.number().int().positive(),
   sessionId: z.string(),
   goal: goalSchema,
+  externalKey: z.string().optional(),
   scope: scopeSchema,
   constraints: z.array(constraintSchema),
   criteria: z.array(criterionSchema),

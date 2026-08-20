@@ -90,6 +90,46 @@ describe('OutcomeLoopService', () => {
     if (!stale.ok) expect(stale.error.code).toBe('contract-revision-conflict')
   })
 
+  it('createOrGetContract is crash-safe idempotent on the external key', async () => {
+    // Same externalKey re-sent (the retry after a provider success where the
+    // caller persisted nothing) MUST resolve to the same contract — never a
+    // second one. This is the atomicity guarantee a forge-owned, post-hoc
+    // index cannot provide.
+    const first = await service.createOrGetContract({
+      sessionId: 's-idem',
+      goalSeq: 1,
+      externalKey: 'activation:root-a:1',
+    })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const retry = await service.createOrGetContract({
+      sessionId: 's-idem',
+      goalSeq: 1,
+      externalKey: 'activation:root-a:1',
+    })
+    expect(retry.ok).toBe(true)
+    if (!retry.ok) return
+    expect(retry.value.id).toBe(first.value.id)
+    expect(retry.value.externalKey).toBe('activation:root-a:1')
+    expect(await service.listContracts({ sessionId: 's-idem' })).toMatchObject({ ok: true, value: expect.arrayContaining([]) })
+
+    // A DIFFERENT externalKey (a new activation ordinal) mints a separate
+    // contract even though sessionId + goalSeq are identical.
+    const other = await service.createOrGetContract({
+      sessionId: 's-idem',
+      goalSeq: 1,
+      externalKey: 'activation:root-a:2',
+    })
+    expect(other.ok).toBe(true)
+    if (!other.ok) return
+    expect(other.value.id).not.toBe(first.value.id)
+
+    // Missing externalKey is a business error, not a silent legacy mint.
+    const noKey = await service.createOrGetContract({ sessionId: 's-idem', goalSeq: 1 })
+    expect(noKey.ok).toBe(false)
+    if (!noKey.ok) expect(noKey.error.code).toBe('invalid-input')
+  })
+
   it('verifies passive evidence end to end (exit-code evidence)', async () => {
     const created = await service.createContract({
       sessionId: 's2',

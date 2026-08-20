@@ -150,6 +150,11 @@ export interface TaskContract {
   revision: number
   sessionId: SessionIdRef
   goal: Goal
+  /** External idempotency key that owns this contract (optional; absent for
+   * contracts minted through the legacy `createContract` path). When present
+   * the contract id is deterministically derived from `(sessionId, externalKey)`,
+   * so a retry of the same key always resolves to this same contract. */
+  externalKey?: string
   scope: TaskScope
   constraints: readonly Constraint[]
   criteria: readonly AcceptanceCriterion[]
