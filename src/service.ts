@@ -26,7 +26,7 @@ import { outcomeDomainSpec } from './persistence/schema.ts'
 import { SessionQueue } from './persistence/queue.ts'
 import { repairIndexes } from './persistence/repair.ts'
 import { FactRegistry } from './dsh/registry.ts'
-import { mountObserver, type ReplayDeps } from './dsh/observer.ts'
+import { mountObserver, type ObserverHandle, type ReplayDeps } from './dsh/observer.ts'
 import { verifyContract } from './verification/engine.ts'
 import { VerifierRegistry } from './verification/registry.ts'
 import type { PolicyContext } from './verification/policy.ts'
@@ -183,6 +183,7 @@ export class OutcomeLoopService extends Service {
   private readonly version: string
   private readonly dshVersion: string | undefined
   private readonly sessionPersistence: SessionPersistence | undefined
+  private readonly observer: ObserverHandle
 
   constructor(ctx: Context, options: OutcomeLoopServiceOptions) {
     super(ctx, 'outcomeLoop')
@@ -222,13 +223,36 @@ export class OutcomeLoopService extends Service {
       logger: { warn: (message, ...args) => this.log('warn', message, ...args) },
       sessionPersistence,
     }
-    this.ctx.effect(() => mountObserver(deps))
+    this.observer = mountObserver(deps)
+    // The observer's `ctx.on(...)` registrations are Cordis effects: they will
+    // be torn down by the fiber unload machinery in `Promise.all`. We do NOT
+    // touch them directly here — the single switch below (`observer.accepting`)
+    // makes new emission paths silently skip enqueue even while the underlying
+    // listener is still attached for the last in-flight dispatch.
 
-    // Disposal: stop accepting mutations, drain queues, close the domain.
+    // Disposal: single-owner teardown with strictly ordered steps.
+    // This `ctx.effect` is the ONLY disposer in the outcome-loop fiber that
+    // touches `options.domain`. No second effect is registered by `apply()`.
     this.ctx.effect(() => async () => {
       this.disposed = true
+      // 1. Stop accepting new observation — observer listeners still attached
+      //    by Cordis will call `queue.enqueue(...)` for any in-flight dispatch,
+      //    but the `accepting=false` gate makes them no-ops.
+      this.observer.stopAccepting()
+      // 2. Yield twice so any in-flight `ctx.emit('session/event', ...)` whose
+      //    listener ran BEFORE the gate flipped completes its `queue.enqueue`
+      //    call (synchronous) and the entry appears in the queue before we
+      //    snapshot. We rely on real quiescence, not sleeps.
+      await new Promise<void>((resolve) => queueMicrotask(resolve))
+      await new Promise<void>((resolve) => queueMicrotask(resolve))
+      // 3. Drain the queue to quiescence — barrier-style; the admission gate
+      //    in `SessionQueue.enqueue` rejects any racing late enqueue, so the
+      //    snapshot cannot miss an accepted task.
       await this.queue.drain()
+      // 4. Release any waiters on `plugin-disposed`.
       for (const waiter of this.disposeWaiters) waiter()
+      // 5. Finally close the storage domain — only after every accepted work
+      //    has reached the durable layer.
       await options.domain.close()
     })
   }

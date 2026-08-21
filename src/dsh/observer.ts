@@ -75,9 +75,19 @@ export async function fillColdSession(deps: ReplayDeps, sessionId: string): Prom
  * Mount observation: subscribe to `session/event`, fill live sessions at
  * startup, and re-fill on `session/created` (resume/fork). Returns the
  * disposer for the caller's fiber.
+ *
+ * `.6` teardown ownership: observation is the live source of new enqueues
+ * into `SessionQueue`. To make `queue.drain()` an actual barrier (so no
+ * accepted work is dropped between `drain()` starting and `domain.close()`),
+ * the service disposer flips `accepting=false` BEFORE draining. This handle
+ * is the single switch the entire teardown sequence reads.
  */
-export function mountObserver(deps: ReplayDeps): () => void {
+export function mountObserver(deps: ReplayDeps): ObserverHandle {
   const { ctx, registry } = deps
+  const handle: ObserverHandle = {
+    accepting: true,
+    stopAccepting() { handle.accepting = false },
+  }
 
   // Startup: fill every live session (covers sessions that stay live across
   // a plugin restart and never re-announce).
@@ -89,11 +99,13 @@ export function mountObserver(deps: ReplayDeps): () => void {
 
   // Resume/fork path: a re-announced session re-fills from its authoritative log.
   ctx.on('session/created', (session: Session) => {
+    if (!handle.accepting) return
     fillLiveSession(deps, session)
   })
 
   // Live tail (hot path — constant-time normalize + enqueue).
   ctx.on('session/event', (session: Session, event: unknown) => {
+    if (!handle.accepting) return
     if (!isSessionEventShape(event)) {
       deps.logger.warn('outcome-loop: dropped a session event with an unsupported envelope')
       return
@@ -115,7 +127,12 @@ export function mountObserver(deps: ReplayDeps): () => void {
     })
   })
 
-  return () => {
-    // Listener disposers ride the fiber automatically; nothing else to free.
-  }
+  return handle
+}
+
+export interface ObserverHandle {
+  /** When `false`, observer rejects further enqueue requests (admission gate). */
+  accepting: boolean
+  /** Stop accepting new observation work; called by the service disposer BEFORE drain. */
+  stopAccepting(): void
 }

@@ -28,7 +28,7 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export const VERSION = '0.1.0-beta.8-keeyahto.5'
+export const VERSION = '0.1.0-beta.8-keeyahto.6'
 
 /** Validate config at load time; fail loud on impossible values. */
 export function validateConfig(config: ConfigType): void {
@@ -77,43 +77,34 @@ function trustedEnv(env: Readonly<Record<string, string | undefined>> | undefine
 }
 
 /**
- * DEP-02A2 follow-up: the previous implementation registered
- * `OutcomeLoopService` inside a fire-and-forget `.then(...)`, which
- * meant `apply()` returned BEFORE the service constructor ran and
- * BEFORE the `outcomeLoop` Cordis Service was registered. Downstream
- * consumers that declare `inject: ['outcomeLoop']` (e.g.
- * `outcome-loop-commands` and Forge's hard-inject consumer) entered
- * the boot graph as `pending` and could race past the loader's
- * `assertEntriesActivated` deadline on a cold start that already
- * has accumulated OutcomeLoop records from a prior run.
+ * DEP-02A2 follow-up + `.6` teardown fix: the `.5` `apply()` registered TWO
+ * independent `domain.close()` dispatches on the same fiber — `OutcomeLoopService`
+ * registered its own (detached observation → drain queue → release waiters →
+ * close domain), and `apply()` registered a second one immediately after. Cordis
+ * Fiber teardown runs the registered disposers in `Promise.all` over the
+ * `DisposableList.clear()` snapshot (`values.reverse()`, so the LATER
+ * registration fires first). Combined with `SessionQueue.drain()` taking its
+ * `chains.values()` snapshot only once, this left a real window for an accepted
+ * operation to dispatch `repository.put*` into a `DomainImpl` whose
+ * `disposing=true` already rejects new writes with `DomainError('closed')`,
+ * losing durable work.
  *
- * The fix is loader-awaited: the plugin entry returns a
- * `Promise<void>` directly. The Cordis plugin registry recognizes
- * a Promise return and the loader's `await fiber.await()` waits on
- * it (verified empirically in `test/integration/probe3.test.ts`).
- * The order is therefore:
+ * The single-owner fix:
  *
- *   1. await ctx.storageDomain.open(outcomeDomainSpec)  (resource ready)
- *   2. new OutcomeLoopService(ctx, ...)                (synchronous constructor
- *                                                      registers `outcomeLoop`
- *                                                      Cordis Service via super())
- *   3. apply() resolves, the loader's `assertEntriesActivated`
- *      fires, and dependent consumers find `ctx.outcomeLoop` ready.
+ *   1. await `ctx.storageDomain.open(outcomeDomainSpec)`          (resource ready)
+ *   2. construct `OutcomeLoopService` directly                    (registers
+ *                                                                  the `outcomeLoop`
+ *                                                                  Cordis Service
+ *                                                                  via `super()`)
+ *   3. if construction throws, close the domain so it doesn't leak — once the
+ *      constructor returns successfully, the service IS the sole owner of the
+ *      ordered teardown via its own `ctx.effect`.
+ *   4. `apply()` resolves and the loader's `assertEntriesActivated` fires
+ *      against the now-ready `ctx.outcomeLoop`.
  *
- * The async-throw path is still fail-loud (never silently degrade:
- * outcome data cannot be durable without the storage domain), but
- * the throw now propagates through the await chain and the loader
- * reports the actual cause instead of the `pending (waiting for
- * service: outcomeLoop)` symptom.
- *
- * The previous `ctx.effect(async () => ...)` approach did NOT
- * resolve this: `ctx.effect` runs the callback on a separate
- * internal fiber whose `await fiber.await()` does NOT await the
- * effect setup (the Cordis Fiber `await()` only waits on `inertia`,
- * which is set on reload/unload, not on initial setup). Awaiting
- * the storage domain DIRECTLY inside `apply` is the only path
- * that the loader's `entry._start -> await fiber.await()` actually
- * observes.
+ * No second `ctx.effect` is registered here. The public `apply()` signature
+ * stays `Promise<void>` — the loader shape Cordis plugin loader's
+ * `entry._start -> await fiber.await()` actually waits on.
  */
 export async function apply(ctx: Context, config: ConfigType): Promise<void> {
   validateConfig(config)
@@ -128,28 +119,27 @@ export async function apply(ctx: Context, config: ConfigType): Promise<void> {
       + (error instanceof Error ? error.message : String(error)),
     )
   }
-  new OutcomeLoopService(ctx, {
-    config,
-    domain,
-    ctx,
-    version: VERSION,
-    dshVersion: KNOWN_COMPATIBLE_DSH,
-    trustedEnv: trustedEnv(process.env),
-  })
-  // Register a domain-close disposer on the current fiber so the
-  // loader's unload path closes the storage unit on plugin teardown.
-  // We do this here (instead of returning a dispose function) so
-  // the public apply() signature stays `Promise<void>`, which is
-  // exactly the shape Cordis plugin loader's `entry._start ->
-  // await fiber.await()` waits on.
-  ctx.effect(() => {
-    return () => {
-      void domain.close().catch(() => {
-        // Domain close failures during teardown are non-fatal;
-        // the facility reaps the unit on unmount anyway.
-      })
+  try {
+    new OutcomeLoopService(ctx, {
+      config,
+      domain,
+      ctx,
+      version: VERSION,
+      dshVersion: KNOWN_COMPATIBLE_DSH,
+      trustedEnv: trustedEnv(process.env),
+    })
+  } catch (error: unknown) {
+    // Construction failed before `OutcomeLoopService` could register its
+    // disposal effect; we still own `domain`, so close it ourselves to avoid
+    // a leaked storage unit.
+    ctx.logger?.error(`outcome-loop: construction failed: ${error instanceof Error ? error.message : String(error)}`)
+    try {
+      await domain.close()
+    } catch {
+      // The facility reaps the unit on unmount anyway; ignore secondary failure.
     }
-  })
+    throw error
+  }
 }
 
 export interface OutcomeLoopPluginEntry {
