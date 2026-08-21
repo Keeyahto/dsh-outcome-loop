@@ -217,13 +217,13 @@ const evidenceFactSchema = z.discriminatedUnion('kind', [
     outputBytes: z.number().int().nonnegative().optional(),
   }),
   z.object({
-    kind: 'verifier',
+    kind: z.literal('verifier'),
     providerId: z.string(),
     verdict: z.enum(['pass', 'fail', 'unknown']),
     detail: z.string(),
   }),
   z.object({
-    kind: 'decision',
+    kind: z.literal('decision'),
     source: z.string(),
     decisionId: z.string(),
     strategy: z.enum(['reuse', 'adapt', 'dependency', 'rewrite']),

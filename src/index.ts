@@ -28,7 +28,7 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export const VERSION = '0.1.0-beta.8-keeyahto.3'
+export const VERSION = '0.1.0-beta.8-keeyahto.5'
 
 /** Validate config at load time; fail loud on impossible values. */
 export function validateConfig(config: ConfigType): void {
@@ -76,37 +76,78 @@ function trustedEnv(env: Readonly<Record<string, string | undefined>> | undefine
   return out
 }
 
-export function apply(ctx: Context, config: ConfigType): void {
+/**
+ * DEP-02A2 follow-up: the previous implementation registered
+ * `OutcomeLoopService` inside a fire-and-forget `.then(...)`, which
+ * meant `apply()` returned BEFORE the service constructor ran and
+ * BEFORE the `outcomeLoop` Cordis Service was registered. Downstream
+ * consumers that declare `inject: ['outcomeLoop']` (e.g.
+ * `outcome-loop-commands` and Forge's hard-inject consumer) entered
+ * the boot graph as `pending` and could race past the loader's
+ * `assertEntriesActivated` deadline on a cold start that already
+ * has accumulated OutcomeLoop records from a prior run.
+ *
+ * The fix is loader-awaited: the plugin entry returns a
+ * `Promise<void>` directly. The Cordis plugin registry recognizes
+ * a Promise return and the loader's `await fiber.await()` waits on
+ * it (verified empirically in `test/integration/probe3.test.ts`).
+ * The order is therefore:
+ *
+ *   1. await ctx.storageDomain.open(outcomeDomainSpec)  (resource ready)
+ *   2. new OutcomeLoopService(ctx, ...)                (synchronous constructor
+ *                                                      registers `outcomeLoop`
+ *                                                      Cordis Service via super())
+ *   3. apply() resolves, the loader's `assertEntriesActivated`
+ *      fires, and dependent consumers find `ctx.outcomeLoop` ready.
+ *
+ * The async-throw path is still fail-loud (never silently degrade:
+ * outcome data cannot be durable without the storage domain), but
+ * the throw now propagates through the await chain and the loader
+ * reports the actual cause instead of the `pending (waiting for
+ * service: outcomeLoop)` symptom.
+ *
+ * The previous `ctx.effect(async () => ...)` approach did NOT
+ * resolve this: `ctx.effect` runs the callback on a separate
+ * internal fiber whose `await fiber.await()` does NOT await the
+ * effect setup (the Cordis Fiber `await()` only waits on `inertia`,
+ * which is set on reload/unload, not on initial setup). Awaiting
+ * the storage domain DIRECTLY inside `apply` is the only path
+ * that the loader's `entry._start -> await fiber.await()` actually
+ * observes.
+ */
+export async function apply(ctx: Context, config: ConfigType): Promise<void> {
   validateConfig(config)
 
-  ctx.effect(() => {
-    const domainPromise = ctx.storageDomain.open(outcomeDomainSpec)
-    let closed = false
-
-    void domainPromise.then(
-      (domain) => {
-        if (closed) {
-          void domain.close()
-          return
-        }
-        new OutcomeLoopService(ctx, {
-          config,
-          domain,
-          ctx,
-          version: VERSION,
-          dshVersion: KNOWN_COMPATIBLE_DSH,
-          trustedEnv: trustedEnv(process.env),
-        })
-      },
-      (error: unknown) => {
-        // Fail loud, never silently degrade: outcome data cannot be durable
-        // without the storage domain.
-        ctx.logger?.error(`outcome-loop: failed to open the outcome_loop storage domain: ${error instanceof Error ? error.message : String(error)}`)
-      },
+  let domain
+  try {
+    domain = await ctx.storageDomain.open(outcomeDomainSpec)
+  } catch (error: unknown) {
+    ctx.logger?.error(`outcome-loop: failed to open the outcome_loop storage domain: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(
+      `outcome-loop: failed to open the outcome_loop storage domain: `
+      + (error instanceof Error ? error.message : String(error)),
     )
-
+  }
+  new OutcomeLoopService(ctx, {
+    config,
+    domain,
+    ctx,
+    version: VERSION,
+    dshVersion: KNOWN_COMPATIBLE_DSH,
+    trustedEnv: trustedEnv(process.env),
+  })
+  // Register a domain-close disposer on the current fiber so the
+  // loader's unload path closes the storage unit on plugin teardown.
+  // We do this here (instead of returning a dispose function) so
+  // the public apply() signature stays `Promise<void>`, which is
+  // exactly the shape Cordis plugin loader's `entry._start ->
+  // await fiber.await()` waits on.
+  ctx.effect(() => {
     return () => {
-      closed = true
+      void domain.close().catch(() => {
+        // Domain close failures during teardown are non-fatal;
+        // the facility reaps the unit on unmount anyway.
+      })
     }
   })
 }
