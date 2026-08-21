@@ -2,6 +2,112 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.8-keeyahto.6] - 2026-08-21
+
+> **Release freeze candidate for M1.** Single-owner teardown fix: an
+> operation accepted into `SessionQueue` before plugin teardown MUST reach
+> the durable storage domain before the storage unit closes.
+
+### Fixed
+
+- **Dual-closer race on `Domain.close()`.** The `.5` `apply()` registered
+  TWO independent disposers targeting the same storage domain: one inside
+  `OutcomeLoopService` (`disposed → queue.drain → release waiters →
+  domain.close`) and a second one inside `apply()` itself
+  (`ctx.effect(() => () => domain.close())`). Cordis Fiber unload runs
+  registered disposers in `Promise.all` over `DisposableList.clear()`
+  (which yields in reverse-registration order), so the LATER
+  registration fires first, racing the service disposer. Under load the
+  second closer could set `disposing=true` and start `await chain` before
+  `queue.drain()` had observed every accepted task, dropping the
+  underlying `repository.put*` with `DomainError('closed')`. Now:
+  `apply()` registers NO `domain.close()` effect of its own. Lifetime of
+  the storage domain is owned EXCLUSIVELY by `OutcomeLoopService`. On
+  construction failure `apply()` performs a single `domain.close()` in a
+  catch block; once the constructor returns successfully, that handler is
+  gone.
+
+- **`SessionQueue.drain()` was a one-shot snapshot.** The previous
+  `drain()` took `[...this.chains.values()]` once and `await
+  Promise.allSettled(...)` — any task enqueued after that snapshot ran
+  outside the barrier. Replaced by a barrier that yields to the
+  microtask queue until `pending` is empty AND every tracked chain
+  promise has settled, AND admission gate rejects any racing late
+  `enqueue()` with `Error('queue-draining')`.
+
+- **Observation had no admission gate parallel to the queue.** A
+  `session/event` delivered just before fiber unload could enqueue work
+  between `queue.drain()` snapshot and `domain.close()` even with the
+  queue fix in place. `mountObserver` now returns an `ObserverHandle`
+  whose `accepting` flag the service disposer flips to `false` BEFORE
+  calling `drain()`; the `session/event` and `session/created` listeners
+  silently skip enqueue when `accepting=false`. The service disposer
+  also yields twice (`queueMicrotask`) before draining to give in-flight
+  listener dispatches a chance to finish their `queue.enqueue` call.
+
+### Added
+
+- Lifecycle regression: `test/integration/teardown-pending-work.test.ts`
+  covers three scenarios — (1) an accepted `createContract` survives a
+  graceful dispose and is reconstructed by a fresh process on the same
+  root; (2) three queued `session/event` observations survive a
+  graceful dispose and the advanced cursor is visible on cold boot; (3)
+  `SessionQueue.enqueue` rejects with `Error('queue-draining')` once
+  `drain()` has begun.
+
+## [0.1.0-beta.8-keeyahto.5] - 2026-08-21
+
+> **DEP-02A2 follow-up release.** Cold-boot loader-awaited startup and
+> fixed schema discriminators. Built on top of `0.1.0-beta.8-keeyahto.4`
+> (no released tarball; `.4` is a local intermediate pack that was used
+> during the M1 E2E and never recorded in `SHA256SUMS`). The `.5` tarball
+> is the first release after that local intermediate and is the version
+> Forge (D:\Files\forge) was depending on at the M1 restart-gate close.
+
+### Fixed
+
+- **Loader-awaited `apply()`.** The previous implementation registered
+  `OutcomeLoopService` inside a fire-and-forget `.then(...)` continuation,
+  so `apply()` returned BEFORE the service constructor ran and BEFORE the
+  `outcomeLoop` Cordis Service was registered. Downstream consumers with
+  `inject: ['outcomeLoop']` (notably `outcome-loop-commands` and Forge's
+  hard-inject consumer) entered the boot graph as `pending` on a cold
+  start that already had accumulated OutcomeLoop records from a prior
+  run, racing past the loader's `assertEntriesActivated` deadline.
+  `apply()` is now an `async` function that returns `Promise<void>` and
+  constructs the service inline after `await
+  ctx.storageDomain.open(...)`. The async-throw path is fail-loud and the
+  error is wrapped with the `outcome-loop:` prefix so the loader reports
+  the actual cause instead of `pending (waiting for service: outcomeLoop)`.
+
+- **Schema discriminator on `disposition` and `verifier` paths.** Replaced
+  `z.string()` literal fields with `z.literal(...)` so discriminated
+  parsing matches an existing `disposition` row stored by a previous
+  process. The old `z.string()` accepted anything, which masked a
+  cold-boot restart failure on real stored records.
+
+## [0.1.0-beta.8-keeyahto.4] - 2026-08-21
+
+> Local intermediate pack used during the DEP-02A2 E2E retry. Not a
+> pushed release; the SHA256 is now retroactively recorded in
+> `SHA256SUMS` for completeness (the tarball on disk is identical to
+> what was used in the E2E), but there is no upstream-tagged commit on
+> this exact version. Forge never consumed `.4` directly.
+
+## [0.1.0-beta.8-keeyahto.3] - 2026-08-21
+
+> Release-process bump: synchronized `src/index.ts` `VERSION` and
+> `package.json` after the `.2` cut. No production-semantic change; this
+> release exists to provide a clean tarball baseline before the DEP-02A2
+> follow-up started.
+
+## [0.1.0-beta.8-keeyahto.2] - 2026-08-21
+
+> Release-process bump: synchronized `src/index.ts` `VERSION` and
+> `package.json` after the `.1` cut. No production-semantic change; the
+> tarball exists so the fork's first fully-tracked tag predates the
+> DEP-02A2 work.
+
 ## [0.1.0-beta.8-keeyahto.1] - 2026-08-20
 
 > Fork pre-release merged on top of upstream `0.1.0-beta.8`. Brings in the
