@@ -2,6 +2,37 @@
 
 所有显著变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0-beta.8-keeyahto.7] - 2026-08-22
+
+> **M1 freshness boundary fix.** The DSH observer previously bumped the
+> `workspaceEpoch` only on `isWriteTool(name)` (`edit`, `write_file`,
+> `apply_patch`, etc.). A `run_code`, `bash`, `sh`, `exec`, `pwsh`,
+> `run_command`, or any shell-style tool that mutates the workspace
+> via filesystem side effects left the epoch untouched — so evidence
+> captured before the script stayed "fresh" beside new evidence
+> captured after, and the verifier locked in `INCONCLUSIVE` forever
+> (engine.ts:240-243 `passRows && failRows` conflict).
+
+### Fixed
+
+- **`file-change-marker` now also fires on exec tools** that may
+>  mutate the workspace (`run_code`, `bash`, `sh`, `zsh`, `fish`,
+>  `pwsh`, `powershell`, `cmd`, `terminal`, `exec`, `run`,
+>  `run_command`) — even on failed exit (a failed bash script may
+>  leave a half-written file, so the bump is conservative).
+>  `isWriteTool(name)` semantics is also unchanged: `edit`,
+>  `write_file`, `apply_patch`, etc. continue to bump.
+
+### Migration
+
+- Forge consumers do not need any code change — the bump is a
+>  server-side freshness signal; existing `recordEvidence` /
+>  `verify` callers see the expected PASS after a successful retry.
+>  The durable evidence rows produced under `.6` retain their
+>  `workspaceState.epoch` — a `.7` verify on a `.6`-era contract
+>  will simply see the new epoch > evidence epoch and mark the
+>  pre-`.7` rows stale. No data migration required.
+
 ## [0.1.0-beta.8-keeyahto.6] - 2026-08-21
 
 > **Release freeze candidate for M1.** Single-owner teardown fix: an

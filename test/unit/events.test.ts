@@ -82,6 +82,87 @@ describe('normalizeEvent', () => {
     expect(facts.some((f) => f.kind === 'file-change-marker')).toBe(true)
   })
 
+  // BUG regression: a successful `run_code` (or any exec tool) must
+  // bump the workspace epoch, because its shell script may have mutated
+  // the workspace passively. Without this, evidence captured before
+  // the script ran stays "fresh" beside new evidence captured after,
+  // and the verifier returns `INCONCLUSIVE` forever (engine.ts
+  // `passRows && failRows` conflict rule). The pre-fix behavior was
+  // to trust only explicit write tools (`edit`, `write_file`, …),
+  // which misses `bash`, `run_code`, `sh`, `exec`, and any DSH
+  // exec-style tool that mutates through filesystem side effects.
+  it('M1 freshness — successful `run_code` bumps the workspace epoch marker', () => {
+    const state = createExtractorState()
+    normalizeEvent(event('tool/call', 20, {
+      callId: 'c-run-code-1', name: 'run_code', arguments: JSON.stringify({ code: "writeFileSync('a.txt', 'mutated')" }), turn: 1, step: 1,
+    }), state)
+    const facts = normalizeEvent(event('tool/result', 21, {
+      message: {
+        source: { kind: 'tool', callId: 'c-run-code-1' },
+        content: [{ type: 'tool-result', content: [{ type: 'text', text: 'ok' }] }],
+      },
+    }), state)
+    expect(facts.some((f) => f.kind === 'file-change-marker')).toBe(true)
+  })
+
+  it('M1 freshness — successful `bash` shell tool bumps the workspace epoch marker', () => {
+    const state = createExtractorState()
+    normalizeEvent(event('tool/call', 22, {
+      callId: 'c-bash-1', name: 'bash', arguments: JSON.stringify({ command: "echo hello > a.txt" }), turn: 1, step: 1,
+    }), state)
+    const facts = normalizeEvent(event('tool/result', 23, {
+      message: {
+        source: { kind: 'tool', callId: 'c-bash-1' },
+        content: [{ type: 'tool-result', content: [{ type: 'text', text: 'ok' }] }],
+      },
+    }), state)
+    expect(facts.some((f) => f.kind === 'file-change-marker')).toBe(true)
+  })
+
+  it('M1 freshness — successful `sh` / `exec` / `pwsh` shell tools also bump', () => {
+    for (const name of ['sh', 'zsh', 'fish', 'pwsh', 'powershell', 'cmd', 'terminal', 'exec', 'run_command']) {
+      const state = createExtractorState()
+      normalizeEvent(event('tool/call', 30, {
+        callId: `c-${name}`, name, arguments: JSON.stringify({ command: 'true' }), turn: 1, step: 1,
+      }), state)
+      const facts = normalizeEvent(event('tool/result', 31, {
+        message: {
+          source: { kind: 'tool', callId: `c-${name}` },
+          content: [{ type: 'tool-result', content: [{ type: 'text', text: 'ok' }] }],
+        },
+      }), state)
+      expect(facts.some((f) => f.kind === 'file-change-marker')).toBe(true)
+    }
+  })
+
+  it('M1 freshness — a FAILED `bash` still bumps the workspace epoch (half-written state is opaque)', () => {
+    const state = createExtractorState()
+    normalizeEvent(event('tool/call', 24, {
+      callId: 'c-bash-fail', name: 'bash', arguments: JSON.stringify({ command: "echo partial > a.txt; exit 1" }), turn: 1, step: 1,
+    }), state)
+    const facts = normalizeEvent(event('tool/result', 25, {
+      message: {
+        source: { kind: 'tool', callId: 'c-bash-fail' },
+        content: [{ type: 'tool-result', content: [{ type: 'text', text: 'partial\n[exit code: 1]' }] }],
+      },
+    }), state)
+    expect(facts.some((f) => f.kind === 'file-change-marker')).toBe(true)
+  })
+
+  it('non-exec, non-write tools (e.g. web_search) do NOT bump the workspace epoch', () => {
+    const state = createExtractorState()
+    normalizeEvent(event('tool/call', 26, {
+      callId: 'c-web', name: 'web_search', arguments: JSON.stringify({ query: 'x' }), turn: 1, step: 1,
+    }), state)
+    const facts = normalizeEvent(event('tool/result', 27, {
+      message: {
+        source: { kind: 'tool', callId: 'c-web' },
+        content: [{ type: 'tool-result', content: [{ type: 'text', text: 'ok' }] }],
+      },
+    }), state)
+    expect(facts.some((f) => f.kind === 'file-change-marker')).toBe(false)
+  })
+
   it('unknown event types are tolerated (never crash)', () => {
     const state = createExtractorState()
     const facts = normalizeEvent(event('future/event-type', 11, { anything: true }), state)

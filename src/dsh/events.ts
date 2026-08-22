@@ -240,9 +240,27 @@ export function normalizeEvent(
         exitCode,
         ...(pending !== undefined && pending.commandLabel !== name ? { commandLabel: pending.commandLabel } : {}),
       })
-      // Only explicit write tools bump the workspace epoch (see ARCHITECTURE.md
-      // for why arbitrary bash mutations are not tracked passively).
-      if (isWriteTool(name) && !isError) {
+      // Workspace-epoch bump: explicit write tools + exec tools that
+      // may mutate the workspace (shell scripts, `run_code`, etc.).
+      //
+      // Why both groups: explicit writes obviously mutate. Exec tools
+      // (`run_code`, `bash`, `sh`, …) carry an opaque shell script
+      // whose workspace effects we cannot observe passively — we
+      // must treat them as MAY-mutate and invalidate stale evidence.
+      // This is conservative (cat/ls also bump), but it is the
+      // fail-closed direction: a missing bump would freeze stale
+      // evidence as fresh and lock the verifier in INCONCLUSIVE
+      // (engine.ts:240-243 `passRows && failRows` conflict) forever.
+      //
+      // The `!isError` guard is dropped for BOTH groups on purpose:
+      // a failed exec tool may have left a half-written state (file
+      // created before the failing line), and we cannot observe
+      // that from the result alone. Bumping on failure is the
+      // conservative choice — a failed write tool also bumps
+      // because we cannot tell whether partial state was written.
+      // The pre-fix behavior kept `!isError` for `isWriteTool`, which
+      // left an asymmetry between write and exec tools.
+      if (isWriteTool(name) || isExecTool(name)) {
         facts.push({ kind: 'file-change-marker', ...base, toolName: name })
       }
       // Structured TAP extraction for test commands: parse in memory, store
